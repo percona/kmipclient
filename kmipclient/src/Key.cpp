@@ -40,7 +40,6 @@ namespace kmipclient {
           return std::make_unique<X509Certificate>(
               core_key.value(), core_key.attributes()
           );
-        case KeyType::UNSET:
         default:
           throw kmipcore::KmipException(
               "Unsupported key type in core->client conversion"
