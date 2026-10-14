@@ -13,7 +13,7 @@
 /** @brief kmipclient semantic version major component. */
 #define KMIPCLIENT_VERSION_MAJOR 0
 /** @brief kmipclient semantic version minor component. */
-#define KMIPCLIENT_VERSION_MINOR 3
+#define KMIPCLIENT_VERSION_MINOR 4
 /** @brief kmipclient semantic version patch component. */
 #define KMIPCLIENT_VERSION_PATCH 0
 

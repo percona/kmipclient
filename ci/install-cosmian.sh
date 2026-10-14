@@ -3,7 +3,7 @@
 # Usage: ci/install-cosmian.sh [cache-dir]
 set -euo pipefail
 
-COSMIAN_VERSION=5.21.0
+COSMIAN_VERSION=5.28.0
 CACHE_DIR="${1:-$HOME/cosmian-deb}"
 ARCH=$(dpkg --print-architecture)
 DEB="cosmian-kms-server-non-fips-static-openssl_${COSMIAN_VERSION}_${ARCH}.deb"

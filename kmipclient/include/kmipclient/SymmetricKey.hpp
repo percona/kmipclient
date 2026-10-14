@@ -12,6 +12,10 @@
 
 namespace kmipclient {
 
+  /**
+   * Symmetric key. To build one from hex, Base64 or raw bytes, or to generate
+   * one, use kmiputil::KeyReader and kmiputil::KeyGenerator.
+   */
   class SymmetricKey final : public Key {
   public:
     using Key::Key;
@@ -20,14 +24,6 @@ namespace kmipclient {
       return KeyType::SYMMETRIC_KEY;
     }
     [[nodiscard]] std::unique_ptr<Key> clone() const override;
-
-    [[nodiscard]] static SymmetricKey aes_from_hex(const std::string &hex);
-    [[nodiscard]] static SymmetricKey
-        aes_from_base64(const std::string &base64);
-    [[nodiscard]] static SymmetricKey
-        aes_from_value(const std::vector<unsigned char> &val);
-    [[nodiscard]] static SymmetricKey
-        generate_aes(aes_key_size key_size = aes_key_size::AES_256);
   };
 
 }  // namespace kmipclient

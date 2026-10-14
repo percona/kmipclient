@@ -39,7 +39,7 @@ used by implementing the four-method `NetClient` interface.
 | `kmipclient/Kmip.hpp` | Simplified facade (bundles `NetClientOpenSSL` + `KmipClient`) |
 | `kmipclient/NetClient.hpp` | Abstract network interface |
 | `kmipclient/NetClientOpenSSL.hpp` | OpenSSL BIO implementation of `NetClient` |
-| `kmipclient/Key.hpp` | Typed key model umbrella header (`Key`, `SymmetricKey`, `PublicKey`, `PrivateKey`, `X509Certificate`, `PEMReader`) |
+| `kmipclient/Key.hpp` | Typed key model umbrella header (`Key`, `SymmetricKey`, `PublicKey`, `PrivateKey`, `X509Certificate`) |
 | `kmipclient/KmipIOException.hpp` | Exception for network/IO errors |
 | `kmipclient/types.hpp` | Type aliases re-exported from `kmipcore` |
 | `kmipclient/kmipclient_version.hpp` | Version macros (`KMIPCLIENT_VERSION_STR`) |
@@ -322,17 +322,21 @@ validation and makes TLS vulnerable to active interception.
 For a complete runnable sample, see `example_get_tls_verify`, which extends the
 basic `example_get` flow with selectable TLS verification modes.
 
-### `Key` and factories
+### `Key`
 
-`kmipclient::Key` is the abstract base class for typed key objects.
+`kmipclient::Key` is the abstract base class for typed key objects. The key
+classes only model KMIP objects; reading keys from hex, Base64, raw bytes or
+PEM, writing them back, and generating AES keys live in the separate
+[`kmiputil`](../kmiputil/README.md) library:
 
-| Factory | Description |
+| Helper | Description |
 |---|---|
-| `SymmetricKey::aes_from_hex(hex)` | Create AES key from hexadecimal string |
-| `SymmetricKey::aes_from_base64(b64)` | Create AES key from Base64 string |
-| `SymmetricKey::aes_from_value(bytes)` | Create AES key from raw byte vector |
-| `SymmetricKey::generate_aes(size_bits)` | Generate a random AES key (128/192/256 bits) |
-| `PEMReader::from_PEM(pem)` | Parse PEM into `X509Certificate` / `PublicKey` / `PrivateKey` / `SymmetricKey` |
+| `kmiputil::KeyReader::aes_from_hex(hex)` | Create AES key from hexadecimal string |
+| `kmiputil::KeyReader::aes_from_base64(b64)` | Create AES key from Base64 string |
+| `kmiputil::KeyReader::aes_from_value(bytes)` | Create AES key from raw bytes |
+| `kmiputil::KeyReader::from_PEM(pem)` | Parse PEM into `X509Certificate` / `PublicKey` / `PrivateKey` / `SymmetricKey` |
+| `kmiputil::KeyWriter::to_hex(key)` / `to_base64(key)` / `to_PEM(key)` | Serialize a key |
+| `kmiputil::KeyGenerator::generate_aes(size)` | Generate a random AES key (128/192/256 bits) |
 
 `op_get_key(...)` returns `std::unique_ptr<Key>` (polymorphic typed key).
 All derived key types expose these common `Key` accessors:
@@ -580,7 +584,7 @@ auto key_id = kmip.client().op_create_aes_key("mykey", "mygroup");
 NetClientOpenSSL net_client(host, port, client_cert, client_key, server_ca, 200);
 KmipClient client(net_client);
 
-auto generated = SymmetricKey::generate_aes(256);
+auto generated = kmiputil::KeyGenerator::generate_aes(aes_key_size::AES_256);
 auto id = client.op_register_key("mykey", "mygroup", generated);
 auto fetched = client.op_get_key(id);
 

@@ -22,20 +22,16 @@ add_library(
   src/IOUtils.hpp
   include/kmipclient/Kmip.hpp
   src/Key.cpp
-  src/PEMReader.cpp
   src/SymmetricKey.cpp
   src/PublicKey.cpp
   src/PrivateKey.cpp
   src/X509Certificate.cpp
   include/kmipclient/Key.hpp
   include/kmipclient/KeyBase.hpp
-  include/kmipclient/PEMReader.hpp
   include/kmipclient/SymmetricKey.hpp
   include/kmipclient/PublicKey.hpp
   include/kmipclient/PrivateKey.hpp
   include/kmipclient/X509Certificate.hpp
-  src/StringUtils.cpp
-  src/StringUtils.hpp
 )
 
 target_include_directories(
@@ -93,6 +89,8 @@ add_example(get_secret)
 add_example(revoke)
 add_example(destroy)
 add_example(register_key)
+# Generates the key it registers locally.
+target_link_libraries(example_register_key PRIVATE kmiputil)
 add_example(locate)
 add_example(locate_by_group)
 add_example(get_all_ids)
@@ -133,6 +131,8 @@ if(BUILD_TESTS)
     PRIVATE
     GTest::gtest_main
     kmipclient
+    # Integration tests build AES keys with kmiputil::KeyReader.
+    kmiputil
   )
 
   include(GoogleTest)

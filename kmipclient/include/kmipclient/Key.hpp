@@ -9,7 +9,6 @@
 #define KMIPCLIENT_KEY_HPP
 
 #include "kmipclient/KeyBase.hpp"
-#include "kmipclient/PEMReader.hpp"
 #include "kmipclient/PrivateKey.hpp"
 #include "kmipclient/PublicKey.hpp"
 #include "kmipclient/SymmetricKey.hpp"

@@ -107,6 +107,11 @@ namespace kmipcore {
     /** @brief Stores a string attribute (routes well-known names to typed
      * setters). */
     Attributes &set(std::string_view name, std::string value);
+    /** @brief Overload so a string literal binds here instead of the bool
+     * overload below. */
+    Attributes &set(std::string_view name, const char *value) {
+      return set(name, std::string(value));
+    }
     /** @brief Stores an integer attribute (routes well-known names to typed
      * setters). */
     Attributes &set(std::string_view name, int32_t value) noexcept;

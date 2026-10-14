@@ -8,6 +8,7 @@
 #include "kmipclient/NetClientOpenSSL.hpp"
 #include "kmipclient/kmipclient_version.hpp"
 #include "kmipcore/kmip_errors.hpp"
+#include "kmiputil/KeyGenerator.hpp"
 
 #include <iomanip>
 #include <iostream>
@@ -41,7 +42,8 @@ int main(int argc, char **argv) {
   KmipClient client(net_client);
 
   try {
-    auto generated_key = SymmetricKey::generate_aes(aes_key_size::AES_256);
+    auto generated_key =
+        kmiputil::KeyGenerator::generate_aes(aes_key_size::AES_256);
     generated_key.attributes().set_usage_mask(
         static_cast<kmipcore::cryptographic_usage_mask>(
             kmipcore::KMIP_CRYPTOMASK_ENCRYPT |

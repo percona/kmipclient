@@ -21,6 +21,7 @@ endif()
 
 add_subdirectory(kmipcore)
 add_subdirectory(kmipclient)
+add_subdirectory(kmiputil)
 
 find_package(Doxygen)
 

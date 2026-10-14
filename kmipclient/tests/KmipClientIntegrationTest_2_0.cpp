@@ -30,6 +30,7 @@
 #include "kmipcore/kmip_basics.hpp"
 #include "kmipcore/kmip_errors.hpp"
 #include "kmipcore/kmip_protocol.hpp"
+#include "kmiputil/KeyReader.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -490,7 +491,7 @@ TEST_F(KmipClientIntegrationTest20, RegisterSymmetricKey) {
     const auto id = kmip->client().op_register_key(
         TESTING_NAME_PREFIX + "RegisterSymmetricKey",
         TEST_GROUP,
-        SymmetricKey::aes_from_value(key_value)
+        kmiputil::KeyReader::aes_from_value(key_value)
     );
     EXPECT_FALSE(id.empty());
     trackForCleanup(id);
@@ -514,7 +515,7 @@ TEST_F(KmipClientIntegrationTest20, RegisterThenActivateSymmetricKey) {
     id = kmip->client().op_register_key(
         TESTING_NAME_PREFIX + "RegisterThenActivateKey",
         TEST_GROUP,
-        SymmetricKey::aes_from_value(key_value)
+        kmiputil::KeyReader::aes_from_value(key_value)
     );
     ASSERT_FALSE(id.empty());
     trackForCleanup(id);
@@ -906,7 +907,7 @@ TEST_F(KmipClientIntegrationTest20, RegisterKeyAndGetAttributes) {
       0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F
   };
   try {
-    auto key = SymmetricKey::aes_from_value(key_value);
+    auto key = kmiputil::KeyReader::aes_from_value(key_value);
     const auto expected_mask = static_cast<cryptographic_usage_mask>(
         kmipcore::KMIP_CRYPTOMASK_ENCRYPT | kmipcore::KMIP_CRYPTOMASK_DECRYPT |
         kmipcore::KMIP_CRYPTOMASK_MAC_GENERATE
