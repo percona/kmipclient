@@ -22,6 +22,44 @@ endif()
 add_subdirectory(kmipcore)
 add_subdirectory(kmipclient)
 
+# Lets a downstream project consume an installed build with
+# find_package(kmipclient), instead of just vendoring this repo with
+# add_subdirectory(). kmipcore and kmipclient version independently (see
+# their own *_version.hpp), but the installed package as a whole is
+# versioned by kmipclient, the one EXPORT set it's all part of.
+include(CMakePackageConfigHelpers)
+
+set(KMIP_INSTALL_CMAKEDIR
+    "lib/cmake/kmipclient"
+    CACHE STRING "Installation directory for the kmipclient CMake package config files"
+)
+
+install(
+  EXPORT kmipclient
+  NAMESPACE kmipclient::
+  FILE kmipclientTargets.cmake
+  DESTINATION ${KMIP_INSTALL_CMAKEDIR}
+)
+
+configure_package_config_file(
+  cmake/kmipclientConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/kmipclientConfig.cmake
+  INSTALL_DESTINATION ${KMIP_INSTALL_CMAKEDIR}
+)
+
+# Tracks kmipclient/include/kmipclient/kmipclient_version.hpp.
+write_basic_package_version_file(
+  ${CMAKE_CURRENT_BINARY_DIR}/kmipclientConfigVersion.cmake
+  VERSION 0.3.0
+  COMPATIBILITY SameMinorVersion
+)
+
+install(
+  FILES ${CMAKE_CURRENT_BINARY_DIR}/kmipclientConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/kmipclientConfigVersion.cmake
+  DESTINATION ${KMIP_INSTALL_CMAKEDIR}
+)
+
 find_package(Doxygen)
 
 option(BUILD_DOCS "Build API documentation with Doxygen" ${DOXYGEN_FOUND})

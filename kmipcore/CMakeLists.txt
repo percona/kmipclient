@@ -20,9 +20,10 @@ set_property(TARGET kmipcore PROPERTY POSITION_INDEPENDENT_CODE ON)
 install(
   TARGETS kmipcore
   EXPORT kmipclient
-  DESTINATION cmake
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib)
+
+install(DIRECTORY include/kmipcore DESTINATION include)
 
 add_executable(kmip_core_test tests/test_core.cpp)
 target_link_libraries(kmip_core_test PRIVATE kmipcore)

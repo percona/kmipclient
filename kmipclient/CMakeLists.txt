@@ -71,11 +71,11 @@ export(TARGETS kmipcore kmipclient FILE "kmipclient.cmake")
 install(
   TARGETS kmipclient
   EXPORT kmipclient
-  DESTINATION cmake
   ARCHIVE DESTINATION lib
-  PUBLIC_HEADER DESTINATION include/
   LIBRARY DESTINATION lib
 )
+
+install(DIRECTORY include/kmipclient DESTINATION include)
 
 macro(add_example name)
   add_executable(example_${name} examples/example_${name}.cpp)
