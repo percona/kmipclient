@@ -60,7 +60,7 @@ namespace kmipclient {
         m_clientCertificateFn(clientCertificateFn),
         m_clientKeyFn(clientKeyFn),
         m_serverCaCertificateFn(serverCaCertFn),
-        m_timeout_ms(timeout_ms) {};
+        m_timeout_ms(timeout_ms) {}
 
     /** @brief Virtual destructor for interface-safe cleanup. */
     virtual ~NetClient() = default;

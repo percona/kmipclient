@@ -147,7 +147,7 @@ namespace kmipclient {
     : net_client(&net_client),
       io(std::make_unique<IOUtils>(net_client, logger)),
       version_(version),
-      close_on_destroy_(close_on_destroy) {};
+      close_on_destroy_(close_on_destroy) {}
 
   KmipClient::KmipClient(
       std::shared_ptr<NetClient> net_client,
@@ -164,7 +164,7 @@ namespace kmipclient {
       throw std::invalid_argument("KmipClient: net_client must not be null");
     }
     io = std::make_unique<IOUtils>(*this->net_client, logger);
-  };
+  }
 
   KmipClient::KmipClient(KmipClient &&other) noexcept
     : net_client(other.net_client),
@@ -218,7 +218,7 @@ namespace kmipclient {
     if (close_on_destroy_ && net_client != nullptr) {
       net_client->close();
     }
-  };
+  }
 
   std::string KmipClient::op_register_key(
       const std::string &name, const std::string &group, const Key &k

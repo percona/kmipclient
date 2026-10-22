@@ -74,7 +74,7 @@ namespace kmipclient {
         ),
         m_client(m_net_client, logger, version, close_on_destroy) {
       m_net_client->connect();
-    };
+    }
 
     /**
      * @brief Destroys the facade, closing the transport if close_on_destroy is
@@ -96,25 +96,25 @@ namespace kmipclient {
      * @brief Returns the initialized high-level KMIP client.
      * @return Mutable reference to the owned @ref KmipClient.
      */
-    KmipClient &client() { return m_client; };
+    KmipClient &client() { return m_client; }
 
     /**
      * @brief Returns const reference to the client.
      */
-    [[nodiscard]] const KmipClient &client() const { return m_client; };
+    [[nodiscard]] const KmipClient &client() const { return m_client; }
 
     /**
      * @brief Returns reference to the underlying transport.
      * Use with care; generally prefer client() for KMIP operations.
      */
-    NetClientOpenSSL &transport() { return *m_net_client; };
+    NetClientOpenSSL &transport() { return *m_net_client; }
 
     /**
      * @brief Returns const reference to the underlying transport.
      */
     [[nodiscard]] const NetClientOpenSSL &transport() const {
       return *m_net_client;
-    };
+    }
 
     /**
      * @brief Queries the close_on_destroy setting.
