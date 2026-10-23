@@ -134,7 +134,7 @@ namespace kmipcore {
           break;
         case tag::KMIP_TAG_CRYPTOGRAPHIC_USAGE_MASK:
           result.set_usage_mask(
-              checked_cryptographic_usage_mask(elem->toInt())
+              static_cast<cryptographic_usage_mask>(elem->toInt())
           );
           break;
         case tag::KMIP_TAG_STATE:
@@ -265,7 +265,7 @@ namespace kmipcore {
         if (raw_name == "Cryptographic Usage Mask") {
           if (attr_value_elem) {
             result.set_usage_mask(
-                checked_cryptographic_usage_mask(attr_value_elem->toInt())
+                static_cast<cryptographic_usage_mask>(attr_value_elem->toInt())
             );
           }
           continue;

@@ -18,6 +18,22 @@ namespace kmipcore {
 
   namespace {
 
+    // Parses a decimal enumeration value, 0..0xFFFFFFFF, so the numeric form
+    // of an unnamed value (e.g. an Extensions code, 8XXXXXXX) reads back.
+    [[nodiscard]] std::optional<std::uint32_t>
+        parse_enum_number(std::string_view s) {
+      if (s.empty() || s.find_first_not_of("0123456789") != s.npos) {
+        return std::nullopt;
+      }
+      const std::string str(s);
+      errno = 0;
+      const unsigned long long v = std::strtoull(str.c_str(), nullptr, 10);
+      if (errno != 0 || v > 0xFFFFFFFFull) {
+        return std::nullopt;
+      }
+      return static_cast<std::uint32_t>(v);
+    }
+
     // ---- Algorithm string conversion ----------------------------------------
 
     [[nodiscard]] std::string algorithm_to_string(cryptographic_algorithm alg) {
@@ -102,15 +118,8 @@ namespace kmipcore {
         return A::KMIP_CRYPTOALG_HMAC_MD5;
       }
       // Try raw numeric
-      if (s.empty()) {
-        return std::nullopt;
-      }
-      const std::string str(s);
-      char *end = nullptr;
-      errno = 0;
-      const long v = std::strtol(str.c_str(), &end, 10);
-      if (errno == 0 && end != str.c_str() && *end == '\0') {
-        return static_cast<A>(v);
+      if (const auto v = parse_enum_number(s)) {
+        return static_cast<A>(*v);
       }
       return std::nullopt;
     }
@@ -138,7 +147,23 @@ namespace kmipcore {
       if (s == "DESTROYED_COMPROMISED") {
         return state::KMIP_STATE_DESTROYED_COMPROMISED;
       }
+      if (const auto v = parse_enum_number(s)) {
+        return static_cast<state>(*v);
+      }
       return std::nullopt;
+    }
+
+    // A defined State by name, any other (e.g. an Extensions value) by
+    // number, which parse_state_string() reads back.
+    [[nodiscard]] std::string state_to_attribute_string(state st) {
+      const auto raw = static_cast<std::uint32_t>(st);
+      if (raw >= static_cast<std::uint32_t>(state::KMIP_STATE_PRE_ACTIVE) &&
+          raw <= static_cast<std::uint32_t>(
+                     state::KMIP_STATE_DESTROYED_COMPROMISED
+                 )) {
+        return state_to_string(st);
+      }
+      return std::to_string(raw);
     }
 
     // ---- AttributeValue → string --------------------------------------------
@@ -391,7 +416,8 @@ namespace kmipcore {
           usage_mask_to_string(static_cast<std::uint32_t>(*usage_mask_));
     }
     if (state_.has_value()) {
-      result[std::string(KMIP_ATTR_NAME_STATE)] = state_to_string(*state_);
+      result[std::string(KMIP_ATTR_NAME_STATE)] =
+          state_to_attribute_string(*state_);
     }
     return result;
   }

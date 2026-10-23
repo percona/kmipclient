@@ -198,12 +198,11 @@ namespace kmipcore {
     // Highest Cryptographic Algorithm value a KMIP version defines: for 1.4
     // and 2.0 from their specs (SHAKE-256, 1.4 §9.1.3.2.13; Ed448, 2.0
     // §11.12), for earlier ones from the version notes in kmip_enums.hpp
-    // (Twofish in 1.0, EC added in 1.2, One Time Pad in 1.3). Extensions
-    // (8XXXXXXX) are negative as int32_t and always pass.
+    // (Twofish in 1.0, EC added in 1.2, One Time Pad in 1.3).
     int32_t last_crypto_algorithm(const ProtocolVersion &version) {
       using algorithm = cryptographic_algorithm;
       if (version.is_at_least(2, 0)) {
-        return std::numeric_limits<int32_t>::max();
+        return static_cast<int32_t>(algorithm::KMIP_CRYPTOALG_ED448);
       }
       if (version.is_at_least(1, 4)) {
         return static_cast<int32_t>(algorithm::KMIP_CRYPTOALG_SHAKE_256);
@@ -215,6 +214,19 @@ namespace kmipcore {
         return static_cast<int32_t>(algorithm::KMIP_CRYPTOALG_EC);
       }
       return static_cast<int32_t>(algorithm::KMIP_CRYPTOALG_TWOFISH);
+    }
+
+    // Whether Register may send @p algorithm over @p version: a code the
+    // version defines, or an Extensions value (8XXXXXXX, 1.4 §9.1.1.4,
+    // 2.0 §10.1.2), which every version permits. An extension usually comes
+    // from the server itself, on a key read back with Get, so it goes back
+    // unchanged.
+    bool algorithm_defined_in(
+        cryptographic_algorithm algorithm, const ProtocolVersion &version
+    ) {
+      const auto value = static_cast<int32_t>(algorithm);
+      return is_enumeration_extension(value) ||
+             (value > 0 && value <= last_crypto_algorithm(version));
     }
 
     struct AlgorithmAndLength {
@@ -234,11 +246,9 @@ namespace kmipcore {
     // still tell them (the Key Block rule allows leaving them out then).
     std::optional<AlgorithmAndLength>
         algorithm_and_length(const Key &key, const ProtocolVersion &version) {
-      const auto algorithm = static_cast<int32_t>(key.attributes().algorithm());
-      if (algorithm == static_cast<int32_t>(
-                           cryptographic_algorithm::KMIP_CRYPTOALG_UNSET
-                       ) ||
-          algorithm > last_crypto_algorithm(version)) {
+      const auto algorithm = key.attributes().algorithm();
+      if (algorithm == cryptographic_algorithm::KMIP_CRYPTOALG_UNSET ||
+          !algorithm_defined_in(algorithm, version)) {
         return std::nullopt;
       }
       std::optional<int32_t> length = key.attributes().crypto_length();
@@ -251,7 +261,7 @@ namespace kmipcore {
       if (!length || *length <= 0) {
         return std::nullopt;
       }
-      return AlgorithmAndLength{algorithm, *length};
+      return AlgorithmAndLength{static_cast<int32_t>(algorithm), *length};
     }
 
     // Why algorithm_and_length() has nothing to send for a symmetric key,
@@ -259,16 +269,15 @@ namespace kmipcore {
     std::string symmetric_key_without_algorithm_and_length(
         const Key &key, const ProtocolVersion &version
     ) {
-      const auto algorithm = static_cast<int32_t>(key.attributes().algorithm());
-      if (algorithm ==
-          static_cast<int32_t>(cryptographic_algorithm::KMIP_CRYPTOALG_UNSET)) {
+      const auto algorithm = key.attributes().algorithm();
+      if (algorithm == cryptographic_algorithm::KMIP_CRYPTOALG_UNSET) {
         return "Cannot register a symmetric key without a Cryptographic "
                "Algorithm: raw key material does not carry it";
       }
-      if (algorithm > last_crypto_algorithm(version)) {
+      if (!algorithm_defined_in(algorithm, version)) {
         return "Cannot register a symmetric key with Cryptographic Algorithm " +
-               std::to_string(algorithm) + ", which KMIP " +
-               std::to_string(version.getMajor()) + "." +
+               std::to_string(static_cast<std::uint32_t>(algorithm)) +
+               ", which KMIP " + std::to_string(version.getMajor()) + "." +
                std::to_string(version.getMinor()) + " does not define";
       }
       if (const auto length = key.attributes().crypto_length()) {

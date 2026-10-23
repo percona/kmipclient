@@ -977,29 +977,61 @@ namespace kmipcore {
   // Enumerations on the wire are unconstrained 4-byte values. Before a parsed
   // value is cast into one of the scoped enums that drive key-handling
   // decisions, callers validate it against the known KMIP value tables so a
-  // malicious server cannot inject out-of-range codes.
+  // malicious server cannot inject undefined codes. Values in the Extensions
+  // range are accepted: other software may legitimately store objects that
+  // use them. They are kept as received; code that acts on a value matches
+  // the defined codes it handles and treats any other value as unknown.
+  //
+  // The Cryptographic Usage Mask is not validated. KMIP 1.4 §9.1.3.3.1
+  // Table 325 defines bits 0x00000001..0x00080000; KMIP 2.0 §12.1 Table 455
+  // marks some of those (0x00000400, 0x00004000..0x00080000) Reserved and
+  // defines 0x00100000..0x00800000. Both reserve XXX00000 for Extensions. So
+  // every bit is a flag in at least one version or an extension bit, and the
+  // parser cannot tell which version the object's attributes were set under.
   // ---------------------------------------------------------------------------
 
-  /** @brief Whether @p value is a defined Cryptographic Algorithm code. */
+  /**
+   * @brief Whether @p value is in the Extensions range of an enumeration.
+   *
+   * Extensions "contain the value 8 hex in the first nibble of the first byte"
+   * (KMIP 1.4 §9.1.1.4, KMIP 2.0 §10.1.2), i.e. 0x80000000..0x8FFFFFFF.
+   */
+  [[nodiscard]] inline bool
+      is_enumeration_extension(std::int32_t value) noexcept {
+    return (static_cast<std::uint32_t>(value) & 0xF0000000u) == 0x80000000u;
+  }
+
+  /**
+   * @brief Whether @p value is a defined or extension Cryptographic Algorithm
+   *        code (KMIP 1.4 §9.1.3.2.13 Table 301, KMIP 2.0 §11.12 Table 405).
+   */
   [[nodiscard]] inline bool
       is_valid_cryptographic_algorithm(std::int32_t value) noexcept {
-    return value >= static_cast<std::int32_t>(
-                        cryptographic_algorithm::KMIP_CRYPTOALG_UNSET
-                    ) &&
-           value <= static_cast<std::int32_t>(
-                        cryptographic_algorithm::KMIP_CRYPTOALG_ED448
-                    );
+    return (value >= static_cast<std::int32_t>(
+                         cryptographic_algorithm::KMIP_CRYPTOALG_DES
+                     ) &&
+            value <= static_cast<std::int32_t>(
+                         cryptographic_algorithm::KMIP_CRYPTOALG_ED448
+                     )) ||
+           is_enumeration_extension(value);
   }
 
-  /** @brief Whether @p value is a defined lifecycle State code. */
+  /**
+   * @brief Whether @p value is a defined or extension lifecycle State code
+   *        (KMIP 1.4 §9.1.3.2.18 Table 306, KMIP 2.0 §11.53 Table 445).
+   */
   [[nodiscard]] inline bool is_valid_state(std::int32_t value) noexcept {
-    return value >= static_cast<std::int32_t>(state::KMIP_STATE_PRE_ACTIVE) &&
-           value <= static_cast<std::int32_t>(
-                        state::KMIP_STATE_DESTROYED_COMPROMISED
-                    );
+    return (value >= static_cast<std::int32_t>(state::KMIP_STATE_PRE_ACTIVE) &&
+            value <= static_cast<std::int32_t>(
+                         state::KMIP_STATE_DESTROYED_COMPROMISED
+                     )) ||
+           is_enumeration_extension(value);
   }
 
-  /** @brief Whether @p value is a defined Secret Data Type code. */
+  /**
+   * @brief Whether @p value is a defined or extension Secret Data Type code
+   *        (KMIP 1.4 §9.1.3.2.9 Table 297, KMIP 2.0 §11.50 Table 443).
+   */
   [[nodiscard]] inline bool
       is_valid_secret_data_type(std::int32_t value) noexcept {
     const auto raw = static_cast<std::uint32_t>(value);
@@ -1009,21 +1041,14 @@ namespace kmipcore {
            raw == static_cast<std::uint32_t>(
                       secret_data_type::KMIP_SECDATA_SEED
                   ) ||
-           raw == static_cast<std::uint32_t>(
-                      secret_data_type::KMIP_SECDATA_EXTENSIONS
-                  );
+           is_enumeration_extension(value);
   }
 
-  /**
-   * @brief Whether @p value is a valid Cryptographic Usage Mask.
-   *
-   * The mask is a bit field; bits 0..23 (Sign .. FPE Decrypt) are the only
-   * defined flags. A value setting any other bit is rejected.
-   */
-  [[nodiscard]] inline bool
-      is_valid_cryptographic_usage_mask(std::int32_t value) noexcept {
-    constexpr std::uint32_t defined_bits = 0x00FFFFFFu;
-    return (static_cast<std::uint32_t>(value) & ~defined_bits) == 0;
+  /** @deprecated Every Cryptographic Usage Mask is valid; see above. */
+  [[deprecated("every Cryptographic Usage Mask value is valid")]] [[nodiscard]]
+  inline bool
+      is_valid_cryptographic_usage_mask(std::int32_t /*value*/) noexcept {
+    return true;
   }
 
   // ---------------------------------------------------------------------------

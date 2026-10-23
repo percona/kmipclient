@@ -5,6 +5,10 @@
  * repository for more information.
  */
 
+// The checks in this file are assert()s; keep them in Release builds, which
+// CI runs, rather than compiling them out.
+#undef NDEBUG
+
 #include "kmipcore/attributes_parser.hpp"
 #include "kmipcore/key_parser.hpp"
 #include "kmipcore/kmip_attribute_names.hpp"
@@ -433,9 +437,9 @@ void test_key_parser_secret_binary() {
   std::cout << "KeyParser Secret Binary test passed" << std::endl;
 }
 
-void test_key_parser_rejects_out_of_range_secret_type() {
-  // An attacker-controlled Secret Data Type enumeration that is not one of the
-  // known values must be rejected rather than cast into the scoped enum.
+// Builds a Get response payload for a Secret Data object whose Secret Data
+// Type is @p secret_type.
+std::shared_ptr<Element> make_secret_payload(int32_t secret_type) {
   auto payload = Element::createStructure(tag::KMIP_TAG_RESPONSE_PAYLOAD);
   payload->asStructure()->add(
       Element::createTextString(tag::KMIP_TAG_UNIQUE_IDENTIFIER, "secret-id")
@@ -448,7 +452,7 @@ void test_key_parser_rejects_out_of_range_secret_type() {
 
   auto secret_data = Element::createStructure(tag::KMIP_TAG_SECRET_DATA);
   secret_data->asStructure()->add(
-      Element::createEnumeration(tag::KMIP_TAG_SECRET_DATA_TYPE, 0x7F)
+      Element::createEnumeration(tag::KMIP_TAG_SECRET_DATA_TYPE, secret_type)
   );
 
   auto key_block = Element::createStructure(tag::KMIP_TAG_KEY_BLOCK);
@@ -466,22 +470,56 @@ void test_key_parser_rejects_out_of_range_secret_type() {
   key_block->asStructure()->add(key_value);
   secret_data->asStructure()->add(key_block);
   payload->asStructure()->add(secret_data);
+  return payload;
+}
 
+Secret parse_secret_payload(const std::shared_ptr<Element> &payload) {
   ResponseBatchItem item;
   item.setOperation(KMIP_OP_GET);
   item.setResultStatus(KMIP_STATUS_SUCCESS);
   item.setResponsePayload(payload);
 
   GetResponseBatchItem get_resp = GetResponseBatchItem::fromBatchItem(item);
-  bool threw = false;
-  try {
-    (void) KeyParser::parseGetSecretResponse(get_resp);
-  } catch (const KmipException &) {
-    threw = true;
+  return KeyParser::parseGetSecretResponse(get_resp);
+}
+
+void test_key_parser_rejects_out_of_range_secret_type() {
+  // An attacker-controlled Secret Data Type enumeration that is neither a
+  // defined value nor in the Extensions range must be rejected rather than
+  // cast into the scoped enum (KMIP 1.4 §9.1.3.2.9, KMIP 2.0 §11.50).
+  for (const uint32_t raw :
+       {0x00000000u,
+        0x00000003u,
+        0x0000007Fu,
+        0x7FFFFFFFu,
+        0x90000000u,
+        0xFFFFFFFFu}) {
+    bool threw = false;
+    try {
+      (void) parse_secret_payload(
+          make_secret_payload(static_cast<int32_t>(raw))
+      );
+    } catch (const KmipException &) {
+      threw = true;
+    }
+    assert(threw);
   }
-  assert(threw);
 
   std::cout << "KeyParser out-of-range secret type rejection test passed"
+            << std::endl;
+}
+
+void test_key_parser_accepts_extension_secret_type() {
+  // Secret Data Type values with 8 hex in the first nibble are Extensions
+  // (KMIP 1.4 §9.1.1.4, §9.1.3.2.9; KMIP 2.0 §11.50) and must be accepted.
+  for (const uint32_t raw : {0x80000000u, 0x80000001u, 0x8FFFFFFFu}) {
+    auto secret =
+        parse_secret_payload(make_secret_payload(static_cast<int32_t>(raw)));
+    assert(static_cast<uint32_t>(secret.get_secret_type()) == raw);
+    assert(secret.value() == std::vector<unsigned char>({'p', 'w'}));
+  }
+
+  std::cout << "KeyParser extension secret type acceptance test passed"
             << std::endl;
 }
 
@@ -680,6 +718,32 @@ void test_register_key_request_algorithm_and_length() {
   );
   expect_pair(sent(ed25519, v14), std::nullopt, std::nullopt);
   expect_pair(sent(ed25519, v20), kEd25519, 256);
+
+  // Extensions values (8XXXXXXX, 1.4 §9.1.1.4, 2.0 §10.1.2) are permitted
+  // in every version, so a vendor algorithm read back from the server goes
+  // back unchanged. Codes above the version's last defined one, including
+  // 0x90000000 and up, which are neither defined nor extensions, are not.
+  for (const auto &version : {ProtocolVersion(1, 0), v14, v20}) {
+    for (const uint32_t code : {0x80000000u, 0x80000001u, 0x8FFFFFFFu}) {
+      const Key vendor(
+          raw,
+          KeyType::SYMMETRIC_KEY,
+          with(static_cast<cryptographic_algorithm>(code), std::nullopt)
+      );
+      expect_pair(sent(vendor, version), static_cast<int32_t>(code), 128);
+    }
+    for (const uint32_t code : {0x00000039u, 0x7FFFFFFFu, 0x90000000u}) {
+      const Key undefined(
+          raw,
+          KeyType::SYMMETRIC_KEY,
+          with(static_cast<cryptographic_algorithm>(code), std::nullopt)
+      );
+      assert(mentions(
+          register_error(undefined, version),
+          (std::to_string(code) + ", which KMIP").c_str()
+      ));
+    }
+  }
 
   std::cout << "RegisterKeyRequest algorithm/length pairing test passed"
             << std::endl;
@@ -996,51 +1060,128 @@ void test_attributes_parser_v2_typed() {
             << std::endl;
 }
 
+// Wraps @p value in a KMIP 1.x Attribute structure named @p name.
+std::shared_ptr<Element> make_legacy_attribute(
+    const std::string &name, const std::shared_ptr<Element> &value
+) {
+  auto attr = Element::createStructure(tag::KMIP_TAG_ATTRIBUTE);
+  attr->asStructure()->add(
+      Element::createTextString(tag::KMIP_TAG_ATTRIBUTE_NAME, name)
+  );
+  attr->asStructure()->add(value);
+  return attr;
+}
+
+Attributes parse_single_attribute(const std::shared_ptr<Element> &attr) {
+  std::vector<std::shared_ptr<Element>> attrs{attr};
+  return AttributesParser::parse(attrs);
+}
+
 void test_attributes_parser_rejects_out_of_range_enums() {
   // A malicious server can send any 4-byte Enumeration. Security-relevant
-  // attributes (algorithm, state, usage mask) must be validated against the
-  // known KMIP value tables before being cast into the scoped enums that steer
-  // key-handling decisions.
+  // attributes (algorithm, state) must be validated against the KMIP value
+  // tables before being cast into the scoped enums that steer key-handling
+  // decisions. Values outside both the defined codes and the Extensions range
+  // (8 hex in the first nibble, KMIP 1.4 §9.1.1.4) are rejected.
   auto expect_throws = [](const std::shared_ptr<Element> &attr) {
-    std::vector<std::shared_ptr<Element>> attrs{attr};
     bool threw = false;
     try {
-      (void) AttributesParser::parse(attrs);
+      (void) parse_single_attribute(attr);
     } catch (const KmipException &) {
       threw = true;
     }
     assert(threw);
   };
 
-  // Out-of-range cryptographic algorithm (0x39 is one past Ed448 = 0x38).
-  expect_throws(
-      Element::createEnumeration(tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM, 0x39)
-  );
-  // Out-of-range lifecycle state (valid range 0x01..0x06).
-  expect_throws(Element::createEnumeration(tag::KMIP_TAG_STATE, 0x07));
-  // Usage mask with bits outside the defined 0..23 flag range.
-  expect_throws(
-      Element::createInteger(
-          tag::KMIP_TAG_CRYPTOGRAPHIC_USAGE_MASK,
-          static_cast<int32_t>(0x01000000)
-      )
-  );
+  // 0 is not a defined code and 0x39 is one past Ed448 = 0x38; 0x7FFFFFFF
+  // and 0x90000000 are just outside the Extensions range on either side.
+  for (const uint32_t raw :
+       {0x00000000u, 0x00000039u, 0x7FFFFFFFu, 0x90000000u, 0xFFFFFFFFu}) {
+    const auto v = static_cast<int32_t>(raw);
+    expect_throws(
+        Element::createEnumeration(tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM, v)
+    );
+    // Same validation on the KMIP 1.x Attribute name/value wrapper path.
+    expect_throws(make_legacy_attribute(
+        "Cryptographic Algorithm",
+        Element::createEnumeration(tag::KMIP_TAG_ATTRIBUTE_VALUE, v)
+    ));
+  }
 
-  // Same validation on the KMIP 1.x Attribute name/value wrapper path.
-  {
-    auto attr = Element::createStructure(tag::KMIP_TAG_ATTRIBUTE);
-    attr->asStructure()->add(
-        Element::createTextString(
-            tag::KMIP_TAG_ATTRIBUTE_NAME, "Cryptographic Algorithm"
-        )
-    );
-    attr->asStructure()->add(
-        Element::createEnumeration(tag::KMIP_TAG_ATTRIBUTE_VALUE, 0x39)
-    );
-    expect_throws(attr);
+  // Lifecycle state: defined range is 0x01..0x06.
+  for (const uint32_t raw :
+       {0x00000000u, 0x00000007u, 0x7FFFFFFFu, 0x90000000u, 0xFFFFFFFFu}) {
+    const auto v = static_cast<int32_t>(raw);
+    expect_throws(Element::createEnumeration(tag::KMIP_TAG_STATE, v));
+    expect_throws(make_legacy_attribute(
+        "State", Element::createEnumeration(tag::KMIP_TAG_ATTRIBUTE_VALUE, v)
+    ));
   }
 
   std::cout << "AttributesParser out-of-range enum rejection test passed"
+            << std::endl;
+}
+
+void test_attributes_parser_accepts_extension_values() {
+  // Objects stored by other software may use vendor extensions. Algorithm and
+  // State values in the Extensions range (KMIP 1.4 §9.1.3.2.13, §9.1.3.2.18;
+  // KMIP 2.0 §11.12, §11.53) must be accepted, at both ends of the range and
+  // inside it.
+  for (const uint32_t raw : {0x80000000u, 0x80000001u, 0x8FFFFFFFu}) {
+    const auto v = static_cast<int32_t>(raw);
+
+    auto alg = parse_single_attribute(
+        Element::createEnumeration(tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM, v)
+    );
+    assert(static_cast<uint32_t>(alg.algorithm()) == raw);
+    alg = parse_single_attribute(make_legacy_attribute(
+        "Cryptographic Algorithm",
+        Element::createEnumeration(tag::KMIP_TAG_ATTRIBUTE_VALUE, v)
+    ));
+    assert(static_cast<uint32_t>(alg.algorithm()) == raw);
+
+    auto st = parse_single_attribute(
+        Element::createEnumeration(tag::KMIP_TAG_STATE, v)
+    );
+    assert(static_cast<uint32_t>(st.object_state()) == raw);
+    st = parse_single_attribute(make_legacy_attribute(
+        "State", Element::createEnumeration(tag::KMIP_TAG_ATTRIBUTE_VALUE, v)
+    ));
+    assert(static_cast<uint32_t>(st.object_state()) == raw);
+
+    // An extension State has no name: as_string_map() gives its number,
+    // which Attributes::set() reads back.
+    const auto as_string =
+        st.as_string_map().at(std::string(KMIP_ATTR_NAME_STATE));
+    assert(as_string == std::to_string(raw));
+    Attributes copy;
+    copy.set(KMIP_ATTR_NAME_STATE, as_string);
+    assert(copy.object_state() == st.object_state());
+  }
+
+  // Every Cryptographic Usage Mask bit is either a defined flag or reserved
+  // for extensions (KMIP 1.4 §9.1.3.3.1, KMIP 2.0 §12.1: Extensions
+  // XXX00000), so any mask is accepted and kept as sent.
+  for (const uint32_t raw :
+       {0x0000000Cu,
+        0x00100000u,
+        0x00800000u,
+        0x0100000Cu,
+        0x80000000u,
+        0xFFFFFFFFu}) {
+    const auto v = static_cast<int32_t>(raw);
+    auto mask = parse_single_attribute(
+        Element::createInteger(tag::KMIP_TAG_CRYPTOGRAPHIC_USAGE_MASK, v)
+    );
+    assert(static_cast<uint32_t>(mask.usage_mask()) == raw);
+    mask = parse_single_attribute(make_legacy_attribute(
+        "Cryptographic Usage Mask",
+        Element::createInteger(tag::KMIP_TAG_ATTRIBUTE_VALUE, v)
+    ));
+    assert(static_cast<uint32_t>(mask.usage_mask()) == raw);
+  }
+
+  std::cout << "AttributesParser extension value acceptance test passed"
             << std::endl;
 }
 
@@ -1325,6 +1466,7 @@ int main() {
   test_key_parser_symmetric();
   test_key_parser_secret_binary();
   test_key_parser_rejects_out_of_range_secret_type();
+  test_key_parser_accepts_extension_secret_type();
   test_register_secret_request_structure();
   test_register_key_request_algorithm_and_length();
   test_get_request_key_format_type();
@@ -1334,6 +1476,7 @@ int main() {
   test_attributes_parser_extended();
   test_attributes_parser_v2_typed();
   test_attributes_parser_rejects_out_of_range_enums();
+  test_attributes_parser_accepts_extension_values();
   test_attributes_parser_legacy_wrapper_preserves_generic_types();
   test_get_attributes_request_encodes_per_protocol_version();
   test_get_attribute_list_response_supports_v2_attribute_reference();

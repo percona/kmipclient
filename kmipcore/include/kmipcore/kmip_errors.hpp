@@ -78,14 +78,10 @@ namespace kmipcore {
     return static_cast<secret_data_type>(value);
   }
 
+  /** @deprecated Every Cryptographic Usage Mask is valid; this only casts. */
+  [[deprecated("every Cryptographic Usage Mask value is valid; cast instead")]]
   [[nodiscard]] inline cryptographic_usage_mask
       checked_cryptographic_usage_mask(std::int32_t value) {
-    if (!is_valid_cryptographic_usage_mask(value)) {
-      throw KmipException(
-          KMIP_ENUM_UNSUPPORTED,
-          "Invalid Cryptographic Usage Mask value: " + std::to_string(value)
-      );
-    }
     return static_cast<cryptographic_usage_mask>(value);
   }
 

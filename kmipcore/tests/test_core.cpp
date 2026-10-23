@@ -5,6 +5,11 @@
  * repository for more information.
  */
 
+// The checks in this file are assert()s; keep them in Release builds, which
+// CI runs, rather than compiling them out.
+#undef NDEBUG
+
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <kmipcore/kmip_attributes.hpp>
@@ -13,6 +18,7 @@
 #include <kmipcore/kmip_formatter.hpp>
 #include <kmipcore/kmip_protocol.hpp>
 #include <kmipcore/kmip_responses.hpp>
+#include <kmipcore/secret.hpp>
 #include <kmipcore/serialization_buffer.hpp>
 
 using namespace kmipcore;
@@ -1025,6 +1031,37 @@ void test_attributes_set_c_string() {
   std::cout << "Attributes set(const char *) test passed" << std::endl;
 }
 
+void test_secret_from_text() {
+  // Every byte of the text is kept, including an embedded NUL and bytes
+  // above 0x7F.
+  const std::string text("pa\0ss\xC3\xA9", 7);
+  auto secret = Secret::from_text(
+      text, secret_data_type::KMIP_SECDATA_SEED, state::KMIP_STATE_ACTIVE
+  );
+  assert(secret.value().size() == text.size());
+  assert(
+      std::equal(
+          secret.value().begin(),
+          secret.value().end(),
+          text.begin(),
+          text.end(),
+          [](unsigned char a, char b) {
+            return a == static_cast<unsigned char>(b);
+          }
+      )
+  );
+  assert(secret.as_text() == text);
+  assert(secret.get_secret_type() == secret_data_type::KMIP_SECDATA_SEED);
+  assert(secret.get_state() == state::KMIP_STATE_ACTIVE);
+
+  auto empty = Secret::from_text("");
+  assert(empty.value().empty());
+  assert(empty.get_secret_type() == secret_data_type::KMIP_SECDATA_PASSWORD);
+  assert(empty.get_state() == state::KMIP_STATE_PRE_ACTIVE);
+
+  std::cout << "Secret from_text test passed" << std::endl;
+}
+
 int main() {
   test_integer();
   test_structure();
@@ -1046,5 +1083,6 @@ int main() {
   test_max_response_size_range_check();
   test_default_max_response_size();
   test_attributes_set_c_string();
+  test_secret_from_text();
   return 0;
 }

@@ -83,8 +83,12 @@ namespace kmipcore {
     ) {
       Attributes attrs;
       attrs.set_state(st);
+      // View the text in place: the constructor copies it straight into
+      // scrubbed storage, so no unscrubbed copy of the secret is made.
       return Secret{
-          std::vector<unsigned char>(text.begin(), text.end()),
+          std::span<const unsigned char>(
+              reinterpret_cast<const unsigned char *>(text.data()), text.size()
+          ),
           type,
           std::move(attrs)
       };
