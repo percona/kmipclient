@@ -161,22 +161,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install OpenSSL
-        run: choco install openssl -y --no-progress
-
+      # The runner image ships OpenSSL with headers and import libraries.
+      # Installing it with choco downloads the full slproweb installer
+      # (over 300 MB) on every run, and that download sometimes stalls
+      # for the whole job timeout, so choco is only a fallback.
       - name: Locate OpenSSL
         shell: bash
+        timeout-minutes: 15
         run: |
-          for dir in "/c/Program Files/OpenSSL" "/c/Program Files/OpenSSL-Win64"; do
-            if [ -e "$dir/include/openssl/ssl.h" ]; then
-              win=$(cygpath -w "$dir")
-              echo "OPENSSL_ROOT_DIR=$win" >> "$GITHUB_ENV"
-              echo "$win\\bin" >> "$GITHUB_PATH"
-              exit 0
-            fi
-          done
-          echo "::error::OpenSSL install not found"
-          exit 1
+          find_openssl() {
+            for dir in "/c/Program Files/OpenSSL" "/c/Program Files/OpenSSL-Win64"; do
+              if [ -e "$dir/include/openssl/ssl.h" ]; then
+                echo "$dir"
+                return 0
+              fi
+            done
+            return 1
+          }
+          if ! dir=$(find_openssl); then
+            echo "OpenSSL not found in the runner image, installing it with choco"
+            choco install openssl -y --no-progress
+            dir=$(find_openssl) || { echo "::error::OpenSSL install not found"; exit 1; }
+          fi
+          "$dir/bin/openssl.exe" version
+          win=$(cygpath -w "$dir")
+          echo "OPENSSL_ROOT_DIR=$win" >> "$GITHUB_ENV"
+          echo "$win\\bin" >> "$GITHUB_PATH"
 
       - name: Configure
         run: cmake -S . -B build -DBUILD_TESTS=ON
