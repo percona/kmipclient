@@ -43,6 +43,10 @@ namespace kmipclient {
      *        enabled). Callers that need to disable verification (e.g. test or
      *        development setups) must opt in explicitly, either by passing the
      *        flags here or via set_tls_verification() afterwards.
+     * @param tls_protocol TLS protocol settings (minimum version, key exchange
+     *        groups, TLS 1.3 cipher suites, signature algorithms). Empty
+     *        fields keep the OpenSSL defaults. Invalid values make connect()
+     *        throw.
      */
     NetClientOpenSSL(
         const std::string &host,
@@ -51,7 +55,8 @@ namespace kmipclient {
         const std::string &clientKeyFn,
         const std::string &serverCaCertFn,
         int timeout_ms = DEFAULT_TIMEOUT_MS,
-        TlsVerificationOptions tls_verification = {}
+        TlsVerificationOptions tls_verification = {},
+        TlsProtocolOptions tls_protocol = {}
     );
     /** @brief Releases OpenSSL resources and closes any open connection. */
     ~NetClientOpenSSL() override;
