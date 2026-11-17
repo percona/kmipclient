@@ -18,6 +18,7 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <sstream>
+#include <utility>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -132,6 +133,52 @@ namespace kmipclient {
 #else
     return SSL_get_peer_certificate(ssl);
 #endif
+  }
+
+  static void configure_tls_protocol(
+      SSL_CTX *ctx, const NetClient::TlsProtocolOptions &options
+  ) {
+    auto fail = [](const char *option, const std::string &value) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          std::string("Failed to apply TLS option ") + option + "='" + value +
+              "': " + getOpenSslError()
+      );
+    };
+
+    if (!options.min_version.empty()) {
+      int version = 0;
+      if (options.min_version == "1.2") {
+        version = TLS1_2_VERSION;
+      } else if (options.min_version == "1.3") {
+        version = TLS1_3_VERSION;
+      } else {
+        throw KmipIOException(
+            kmipcore::KMIP_IO_FAILURE,
+            "Invalid TLS option min_version='" + options.min_version +
+                "': expected 1.2 or 1.3"
+        );
+      }
+      if (SSL_CTX_set_min_proto_version(ctx, version) != 1) {
+        fail("min_version", options.min_version);
+      }
+    }
+
+    if (!options.groups.empty() &&
+        SSL_CTX_set1_groups_list(ctx, options.groups.c_str()) != 1) {
+      fail("groups", options.groups);
+    }
+
+    if (!options.cipher_suites.empty() &&
+        SSL_CTX_set_ciphersuites(ctx, options.cipher_suites.c_str()) != 1) {
+      fail("cipher_suites", options.cipher_suites);
+    }
+
+    if (!options.signature_algorithms.empty() &&
+        SSL_CTX_set1_sigalgs_list(ctx, options.signature_algorithms.c_str()) !=
+            1) {
+      fail("signature_algorithms", options.signature_algorithms);
+    }
   }
 
   static void configure_tls_verification(
@@ -405,7 +452,8 @@ namespace kmipclient {
       const std::string &clientKeyFn,
       const std::string &serverCaCertFn,
       int timeout_ms,
-      TlsVerificationOptions tls_verification
+      TlsVerificationOptions tls_verification,
+      TlsProtocolOptions tls_protocol
   )
     : NetClient(
           host,
@@ -416,6 +464,7 @@ namespace kmipclient {
           timeout_ms
       ) {
     m_tls_verification = tls_verification;
+    m_tls_protocol = std::move(tls_protocol);
   }
 
   NetClientOpenSSL::~NetClientOpenSSL() {
@@ -436,6 +485,8 @@ namespace kmipclient {
           kmipcore::KMIP_IO_FAILURE, "SSL_CTX_new failed: " + getOpenSslError()
       );
     }
+
+    configure_tls_protocol(new_ctx.get(), m_tls_protocol);
 
     configure_tls_verification(
         new_ctx.get(), nullptr, std::string{}, m_tls_verification
