@@ -98,12 +98,51 @@ namespace kmipcore {
         key_attrs.set_crypto_length(len_elem->toInt());
       }
 
+      if (key_type == KeyType::SYMMETRIC_KEY) {
+        KeyParser::checkSymmetricKeyMaterial(
+            kv, key_format->toEnum(), key_attrs
+        );
+      }
+
       Key key(kv, key_type, std::move(key_attrs));
       key.set_key_format(key_format->toEnum());
       return key;
     }
 
   }  // anonymous namespace
+
+  void KeyParser::checkSymmetricKeyMaterial(
+      std::span<const unsigned char> material,
+      int32_t key_format,
+      const Attributes &attributes
+  ) {
+    if (material.empty()) {
+      throw KmipException(
+          KMIP_INVALID_ENCODING, "Key Material of the Symmetric Key is empty."
+      );
+    }
+    const auto length = attributes.crypto_length();
+    if (key_format != KMIP_KEYFORMAT_RAW || !length.has_value()) {
+      return;
+    }
+    // 64-bit: the length comes from the server and may be anything.
+    const int64_t stated = *length;
+    const auto bits = static_cast<int64_t>(material.size()) * 8;
+    const auto algorithm = attributes.algorithm();
+    const bool parity_allowed =
+        algorithm == cryptographic_algorithm::KMIP_CRYPTOALG_DES ||
+        algorithm == cryptographic_algorithm::KMIP_CRYPTOALG_TRIPLE_DES;
+    if (bits == stated ||
+        (parity_allowed && stated % 7 == 0 && bits == stated / 7 * 8)) {
+      return;
+    }
+    throw KmipException(
+        KMIP_INVALID_ENCODING,
+        "Key Material of the Symmetric Key has " + std::to_string(bits) +
+            " bits, but its Cryptographic Length is " + std::to_string(stated) +
+            "."
+    );
+  }
 
   Key KeyParser::parseGetKeyResponse(const GetResponseBatchItem &item) {
     return parseResponse(item.getResponsePayload());

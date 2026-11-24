@@ -121,6 +121,12 @@ namespace kmipcore {
           "GetResponseBatchItem: missing unique identifier in response payload"
       );
     }
+    if (uniqueIdentifier->type != Type::KMIP_TYPE_TEXT_STRING) {
+      throw KmipException(
+          KMIP_INVALID_ENCODING,
+          "GetResponseBatchItem: Unique Identifier is not a Text String"
+      );
+    }
     result.uniqueIdentifier_ = uniqueIdentifier->toString();
 
     auto objectType = payload->getChild(tag::KMIP_TAG_OBJECT_TYPE);
@@ -155,6 +161,18 @@ namespace kmipcore {
     auto payload = detail::require_response_payload(
         item, "GetAttributesResponseBatchItem"
     );
+    // A Text String in responses (KMIP 1.4 §3.1, 2.0 §4.51: the other
+    // forms exist only in requests).
+    if (const auto id = payload->getChild(tag::KMIP_TAG_UNIQUE_IDENTIFIER)) {
+      if (id->type != Type::KMIP_TYPE_TEXT_STRING) {
+        throw KmipException(
+            KMIP_INVALID_ENCODING,
+            "GetAttributesResponseBatchItem: Unique Identifier is not a Text "
+            "String"
+        );
+      }
+      result.uniqueIdentifier_ = id->toString();
+    }
 
     // KMIP 1.x returns Attribute elements directly under Response Payload.
     // KMIP 2.0 wraps attributes inside an Attributes structure with typed
