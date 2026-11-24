@@ -214,6 +214,19 @@ namespace {
           Element::createEnumeration(tag::KMIP_TAG_KEY_FORMAT_TYPE, format)
       );
       key_block->asStructure()->add(key_value);
+      if (behavior_.object_type == kmipcore::KMIP_OBJTYPE_SYMMETRIC_KEY) {
+        // A symmetric Key Block states algorithm and length (KMIP 1.4
+        // Table 7); material_in() is 16 bytes.
+        key_block->asStructure()->add(
+            Element::createEnumeration(
+                tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM,
+                kmipcore::KMIP_CRYPTOALG_AES
+            )
+        );
+        key_block->asStructure()->add(
+            Element::createInteger(tag::KMIP_TAG_CRYPTOGRAPHIC_LENGTH, 128)
+        );
+      }
       auto object = Element::createStructure(object_tag(behavior_.object_type));
       object->asStructure()->add(key_block);
 

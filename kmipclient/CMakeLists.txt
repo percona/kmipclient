@@ -126,6 +126,7 @@ if(BUILD_TESTS)
     tests/IOUtilsTest.cpp
     tests/LocatePagingTest.cpp
     tests/GetKeyFormatTest.cpp
+    tests/GetResponseCheckTest.cpp
     tests/KmipClientIntegrationTest.cpp
     tests/KmipClientIntegrationTest_2_0.cpp
     tests/KmipClientPoolIntegrationTest.cpp
