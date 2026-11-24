@@ -1,3 +1,17 @@
+Unreleased
+
+    The Kmip facade (constructor and Kmip::create_shared()) verifies the
+    server certificate chain and host name by default, like NetClientOpenSSL
+    and KmipClientPool: the default of its tls_verification parameter is
+    {true, true} instead of {false, false}. A server whose certificate does
+    not chain to server_ca, or does not match the host, is now refused
+    ("certificate verify failed") unless the caller passes {true, false} or
+    {false, false}. The usual case is connecting by IP address to a server
+    whose certificate has only DNS names: connect by one of those names, or
+    pass {true, false}. The examples that use the facade (example_create_aes,
+    example_register_secret, example_query_server_info,
+    example_supported_versions) now verify the server too.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
