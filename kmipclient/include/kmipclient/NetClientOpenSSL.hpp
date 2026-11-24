@@ -31,7 +31,9 @@ namespace kmipclient {
 
     /**
      * @brief Constructs an OpenSSL-backed transport.
-     * @param host KMIP server host.
+     * @param host KMIP server host name or IP address; connect() throws
+     *        KmipIOException when it is empty or names no host (e.g.
+     *        ":5696", "[]", "*").
      * @param port KMIP server port.
      * @param clientCertificateFn Path to client certificate in PEM.
      * @param clientKeyFn Path to client private key in PEM.

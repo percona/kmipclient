@@ -38,7 +38,8 @@ namespace kmipclient {
 
     /**
      * @brief Stores transport configuration.
-     * @param host KMIP server host.
+     * @param host KMIP server host name or IP address; must not be empty
+     *        (NetClientOpenSSL::connect() throws KmipIOException).
      * @param port KMIP server port.
      * @param clientCertificateFn Path to client X.509 certificate in PEM.
      * @param clientKeyFn Path to matching client private key in PEM.

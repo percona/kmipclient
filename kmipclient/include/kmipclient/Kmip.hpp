@@ -34,7 +34,7 @@ namespace kmipclient {
   public:
     /**
      * @brief Creates and connects an OpenSSL-based KMIP client stack.
-     * @param host KMIP server hostname or IP address.
+     * @param host KMIP server hostname or IP address; must not be empty.
      * @param port KMIP server port.
      * @param clientCertificateFn Path to client X.509 certificate in PEM.
      * @param clientKeyFn Path to client private key in PEM.

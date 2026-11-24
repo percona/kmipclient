@@ -155,6 +155,15 @@ namespace kmipclient {
     );
 
     if (host.empty()) {
+      // The context-level call passes no SSL and no host on purpose. For a
+      // connection, connect() has already refused an empty host; this keeps
+      // a requested host name check from being skipped silently.
+      if (ssl != nullptr && options.hostname_verification) {
+        throw KmipIOException(
+            kmipcore::KMIP_IO_FAILURE,
+            "TLS hostname verification requested, but no host name was given"
+        );
+      }
       return;
     }
 
@@ -422,7 +431,31 @@ namespace kmipclient {
     close();
   }
 
+  // True when OpenSSL would connect `host` to the local host because no host
+  // name is left once it is parsed: "", and also ":", ":5696", "[]", "*"
+  // (BIO_set_conn_hostname splits "host:port" with BIO_parse_hostserv()). A
+  // NUL byte would cut the name short for OpenSSL.
+  static bool has_no_host_name(const std::string &host) {
+    if (host.empty() || host.find('\0') != std::string::npos) {
+      return true;
+    }
+    char *name = nullptr;
+    char *service = nullptr;
+    const int parsed =
+        BIO_parse_hostserv(host.c_str(), &name, &service, BIO_PARSE_PRIO_HOST);
+    const bool no_name = parsed == 1 && (name == nullptr || *name == '\0');
+    OPENSSL_free(name);
+    OPENSSL_free(service);
+    ERR_clear_error();
+    return no_name;
+  }
+
   bool NetClientOpenSSL::connect() {
+    if (has_no_host_name(m_host)) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE, "KMIP server host name must not be empty"
+      );
+    }
     if (!m_isConnected) {
       bio_.reset();
       ctx_.reset();
