@@ -437,6 +437,14 @@ namespace kmipclient {
       );
     }
 
+#ifdef SSL_OP_CLEANSE_PLAINTEXT
+    // Responses carry key material, and OpenSSL decrypts each record in its
+    // own read buffer. Have it zero the plaintext once the caller has read
+    // it, as the library does with its own buffers (OpenSSL 3.0 and later;
+    // older versions have no such option).
+    SSL_CTX_set_options(new_ctx.get(), SSL_OP_CLEANSE_PLAINTEXT);
+#endif
+
     configure_tls_verification(
         new_ctx.get(), nullptr, std::string{}, m_tls_verification
     );
