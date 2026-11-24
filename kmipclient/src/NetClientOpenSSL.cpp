@@ -17,16 +17,14 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
+#include <optional>
 #include <sstream>
 
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
 #else
-  #include <fcntl.h>
   #include <poll.h>
-  #include <sys/socket.h>
-  #include <sys/time.h>
 #endif
 
 namespace kmipclient {
@@ -51,9 +49,6 @@ namespace kmipclient {
   static int last_socket_error() {
     return WSAGetLastError();
   }
-  static void clear_socket_error() {
-    WSASetLastError(0);
-  }
   static std::string socket_error_string(int err) {
     char buf[256] = {};
     const DWORD len = FormatMessageA(
@@ -75,23 +70,12 @@ namespace kmipclient {
     }
     return msg;
   }
-  // WSAETIMEDOUT: SO_RCVTIMEO/SO_SNDTIMEO expired. WSAEWOULDBLOCK is the
-  // Windows analogue of EAGAIN on a socket with a pending timeout.
-  static bool is_timeout_socket_error(int err) {
-    return err == WSAETIMEDOUT || err == WSAEWOULDBLOCK;
-  }
 #else
   static int last_socket_error() {
     return errno;
   }
-  static void clear_socket_error() {
-    errno = 0;
-  }
   static std::string socket_error_string(int err) {
     return strerror(err);
-  }
-  static bool is_timeout_socket_error(int err) {
-    return err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT;
   }
 #endif
 
@@ -232,12 +216,24 @@ namespace kmipclient {
   }
 
   // Waits until the SSL BIO can make forward progress, bounded by deadline.
+  // exchange_deadline: the deadline is the one set around a request/response
+  // exchange (possibly by the caller), not now + timeout_ms; the message then
+  // does not quote timeout_ms.
   static void wait_for_bio_retry(
       BIO *bio,
       const std::chrono::steady_clock::time_point &deadline,
       const char *op,
-      int timeout_ms
+      int timeout_ms,
+      bool exchange_deadline = false
   ) {
+    const auto timed_out = [&] {
+      return KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          exchange_deadline ? std::string("KMIP ") + op +
+                                  " timed out: exchange deadline passed"
+                            : timeoutMessage(op, timeout_ms)
+      );
+    };
     int fd = -1;
     if (BIO_get_fd(bio, &fd) < 0 || fd < 0) {
       throw KmipIOException(
@@ -248,9 +244,7 @@ namespace kmipclient {
 
     const auto now = std::chrono::steady_clock::now();
     if (now >= deadline) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, timeoutMessage(op, timeout_ms)
-      );
+      throw timed_out();
     }
 
     auto remaining_ms =
@@ -287,106 +281,13 @@ namespace kmipclient {
 #endif
 
     if (poll_ret == 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, timeoutMessage(op, timeout_ms)
-      );
+      throw timed_out();
     }
     if (poll_ret < 0) {
       throw KmipIOException(
           kmipcore::KMIP_IO_FAILURE,
           std::string("poll failed while waiting for ") + op + ": " +
               socket_error_string(last_socket_error())
-      );
-    }
-  }
-
-  static void restore_socket_blocking(BIO *bio) {
-    int fd = -1;
-    if (BIO_get_fd(bio, &fd) < 0 || fd < 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          "Unable to obtain socket fd for mode switch"
-      );
-    }
-
-#ifdef _WIN32
-    u_long blocking_mode = 0;
-    if (ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &blocking_mode) != 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          "ioctlsocket(FIONBIO) failed: " +
-              socket_error_string(last_socket_error())
-      );
-    }
-#else
-    const int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          std::string("fcntl(F_GETFL) failed: ") +
-              socket_error_string(last_socket_error())
-      );
-    }
-
-    const int desired_flags = flags & ~O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, desired_flags) != 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          std::string("fcntl(F_SETFL) failed: ") +
-              socket_error_string(last_socket_error())
-      );
-    }
-#endif
-  }
-
-  // Apply SO_RCVTIMEO / SO_SNDTIMEO on the underlying socket so that every
-  // BIO_read / BIO_write call times out after timeout_ms milliseconds.
-  // Must be called after BIO_do_connect() succeeds.
-  static void apply_socket_io_timeout(BIO *bio, int timeout_ms) {
-    if (timeout_ms <= 0) {
-      return;
-    }
-
-    int fd = -1;
-    if (BIO_get_fd(bio, &fd) < 0 || fd < 0) {
-      // Unable to obtain socket fd – skip silently (non-fatal).
-      return;
-    }
-
-#ifdef _WIN32
-    const DWORD tv = static_cast<DWORD>(timeout_ms);
-    const SOCKET sock = static_cast<SOCKET>(fd);
-#else
-    struct timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    const int sock = fd;
-#endif
-
-    if (setsockopt(
-            sock,
-            SOL_SOCKET,
-            SO_RCVTIMEO,
-            reinterpret_cast<const char *>(&tv),
-            sizeof(tv)
-        ) != 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          "Failed to set SO_RCVTIMEO (" + std::to_string(timeout_ms) +
-              "ms): " + socket_error_string(last_socket_error())
-      );
-    }
-    if (setsockopt(
-            sock,
-            SOL_SOCKET,
-            SO_SNDTIMEO,
-            reinterpret_cast<const char *>(&tv),
-            sizeof(tv)
-        ) != 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          "Failed to set SO_SNDTIMEO (" + std::to_string(timeout_ms) +
-              "ms): " + socket_error_string(last_socket_error())
       );
     }
   }
@@ -498,7 +399,12 @@ namespace kmipclient {
 
     configure_tls_verification(new_ctx.get(), ssl, m_host, m_tls_verification);
 
-    SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+    if (m_timeout_ms <= 0) {
+      // Blocking socket: let one BIO_read() skip non-application records.
+      // With a timeout the retry loop in send()/recv() does that, checking
+      // the deadline between records.
+      SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+    }
     BIO_set_conn_hostname(new_bio.get(), m_host.c_str());
     BIO_set_conn_port(new_bio.get(), m_port.c_str());
 
@@ -529,13 +435,9 @@ namespace kmipclient {
             new_bio.get(), deadline, "connect/handshake", m_timeout_ms
         );
       }
-
-      restore_socket_blocking(new_bio.get());
-      if (BIO_set_nbio(new_bio.get(), 0) != 1) {
-        throw KmipIOException(
-            kmipcore::KMIP_IO_FAILURE, "BIO_set_nbio(0) failed after connect"
-        );
-      }
+      // The socket stays non-blocking: send() and recv() wait with poll()
+      // against a deadline, as the handshake above does. A socket timeout
+      // (SO_RCVTIMEO) would restart with every byte the peer sends.
     } else {
       if (BIO_do_connect(new_bio.get()) != 1) {
         throw KmipIOException(
@@ -546,10 +448,6 @@ namespace kmipclient {
     }
 
     ensure_tls_peer_verified(ssl, m_tls_verification);
-
-    // Apply per-operation I/O timeouts on the now-connected socket so that
-    // every subsequent BIO_read / BIO_write times out after m_timeout_ms ms.
-    apply_socket_io_timeout(new_bio.get(), m_timeout_ms);
 
     bio_ = std::move(new_bio);
     ctx_ = std::move(new_ctx);
@@ -564,20 +462,51 @@ namespace kmipclient {
     ctx_.reset();
   }
 
+  // With a timeout the socket is non-blocking: retry until the operation
+  // makes progress, waiting with poll() no longer than the deadline (the
+  // exchange deadline when one is set, else timeout_ms from now). This
+  // bounds the call however slowly the peer sends or reads, also while
+  // OpenSSL assembles one TLS record from many socket reads.
+  template<typename Io>
+  static int io_with_deadline(
+      BIO *bio,
+      std::optional<NetClient::Clock::time_point> io_deadline,
+      int timeout_ms,
+      const char *op,
+      Io &&io
+  ) {
+    if (timeout_ms <= 0) {
+      return io();  // blocking socket, no timeout
+    }
+    const auto deadline = io_deadline.value_or(
+        NetClient::Clock::now() + std::chrono::milliseconds(timeout_ms)
+    );
+    for (;;) {
+      ERR_clear_error();
+      const int ret = io();
+      // A retry that waits for neither reading nor writing is not expected
+      // after the handshake; report it instead of polling until the
+      // deadline.
+      if (ret > 0 || !BIO_should_retry(bio) ||
+          (!BIO_should_read(bio) && !BIO_should_write(bio))) {
+        return ret;
+      }
+      wait_for_bio_retry(
+          bio, deadline, op, timeout_ms, io_deadline.has_value()
+      );
+    }
+  }
+
   int NetClientOpenSSL::send(std::span<const std::uint8_t> data) {
     if (!checkConnected()) {
       return -1;
     }
     const int dlen = static_cast<int>(data.size());
-    clear_socket_error();
-    const int ret = BIO_write(bio_.get(), data.data(), dlen);
-    if (ret <= 0 && BIO_should_retry(bio_.get()) &&
-        is_timeout_socket_error(last_socket_error())) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, timeoutMessage("send", m_timeout_ms)
-      );
-    }
-    return ret;
+    return io_with_deadline(
+        bio_.get(), m_io_deadline, m_timeout_ms, "send", [&] {
+          return BIO_write(bio_.get(), data.data(), dlen);
+        }
+    );
   }
 
   int NetClientOpenSSL::recv(std::span<std::uint8_t> data) {
@@ -585,15 +514,11 @@ namespace kmipclient {
       return -1;
     }
     const int dlen = static_cast<int>(data.size());
-    clear_socket_error();
-    const int ret = BIO_read(bio_.get(), data.data(), dlen);
-    if (ret <= 0 && BIO_should_retry(bio_.get()) &&
-        is_timeout_socket_error(last_socket_error())) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, timeoutMessage("receive", m_timeout_ms)
-      );
-    }
-    return ret;
+    return io_with_deadline(
+        bio_.get(), m_io_deadline, m_timeout_ms, "receive", [&] {
+          return BIO_read(bio_.get(), data.data(), dlen);
+        }
+    );
   }
 
 }  // namespace kmipclient

@@ -61,8 +61,10 @@ namespace {
 
   class FakeLocateServer final : public kmipclient::NetClient {
   public:
+    // No timeout: building the multi-megabyte responses of the large cases
+    // takes seconds under ASan, and that would count against the exchange.
     explicit FakeLocateServer(ServerBehavior behavior)
-      : NetClient("host", "5696", "client.pem", "client.key", "ca.pem", 1000),
+      : NetClient("host", "5696", "client.pem", "client.key", "ca.pem", 0),
         behavior_(behavior) {
       m_isConnected = true;
     }

@@ -84,7 +84,8 @@ namespace kmipclient {
                                    ///< server cert)
       std::shared_ptr<kmipcore::Logger>
           logger;  ///< Optional KMIP protocol logger
-      /** Connect/read/write timeout in milliseconds. */
+      /** Timeout in milliseconds for connecting (TCP and TLS together) and
+       * for each request/response exchange as a whole. */
       int timeout_ms = 5000;
       /** Maximum number of simultaneous live connections in the pool. */
       size_t max_connections = DEFAULT_MAX_CONNECTIONS;

@@ -35,12 +35,15 @@ namespace kmipclient {
 
   private:
     void log_debug(const char *event, std::span<const uint8_t> ttlv) const;
+    /** Throws KmipIOException once the exchange deadline has passed. */
+    void check_deadline(const char *op) const;
     void send(std::span<const uint8_t> request_bytes) const;
     kmipcore::secure_bytes receive_message(size_t max_message_size);
 
     /**
      * Reads exactly n bytes from the network into the buffer.
-     * Throws KmipException on error or prematureEOF.
+     * Throws KmipException on error, premature EOF or when the exchange
+     * deadline passes.
      */
     void read_exact(std::span<uint8_t> buf);
 

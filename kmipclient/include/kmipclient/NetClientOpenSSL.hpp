@@ -36,8 +36,10 @@ namespace kmipclient {
      * @param clientCertificateFn Path to client certificate in PEM.
      * @param clientKeyFn Path to client private key in PEM.
      * @param serverCaCertFn Path to trusted server CA/certificate in PEM.
-     * @param timeout_ms Timeout in milliseconds applied to TCP connect, TLS
-     *        handshake, and each read/write operation.
+     * @param timeout_ms Timeout in milliseconds for the TCP connect and TLS
+     *        handshake together, and for each request/response exchange as a
+     *        whole (see NetClient::set_io_deadline()). With a positive value
+     *        the socket stays non-blocking and every wait is bounded by it.
      * @param tls_verification TLS peer/hostname verification settings.
      *        Defaults to {true, true} (peer and hostname verification both
      *        enabled). Callers that need to disable verification (e.g. test or
