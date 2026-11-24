@@ -37,6 +37,22 @@ namespace kmipclient {
     };
 
     /**
+     * @brief TLS protocol settings applied on the next connect().
+     *
+     * Empty strings leave the corresponding OpenSSL default untouched.
+     */
+    struct TlsProtocolOptions {
+      /** Minimum protocol version: "", "1.2" or "1.3". */
+      std::string min_version;
+      /** Key exchange groups, as accepted by SSL_CTX_set1_groups_list(). */
+      std::string groups;
+      /** TLS 1.3 cipher suites, as accepted by SSL_CTX_set_ciphersuites(). */
+      std::string cipher_suites;
+      /** Signature algorithms, as accepted by SSL_CTX_set1_sigalgs_list(). */
+      std::string signature_algorithms;
+    };
+
+    /**
      * @brief Stores transport configuration.
      * @param host KMIP server host.
      * @param port KMIP server port.
@@ -125,6 +141,7 @@ namespace kmipclient {
     std::string m_serverCaCertificateFn;
     int m_timeout_ms;
     TlsVerificationOptions m_tls_verification{};
+    TlsProtocolOptions m_tls_protocol{};
     std::atomic<bool> m_isConnected{false};
   };
 

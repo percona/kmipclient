@@ -47,6 +47,8 @@ namespace kmipclient {
      * @param close_on_destroy When true (default), closes the transport on
      *        Kmip destruction. Set to false to keep transport alive after
      *        Kmip destruction.
+     * @param tls_protocol TLS protocol settings (minimum version, key exchange
+     *        groups, TLS 1.3 cipher suites, signature algorithms).
      * @throws kmipcore::KmipException when network/TLS initialization fails.
      */
     Kmip(
@@ -59,7 +61,8 @@ namespace kmipclient {
         kmipcore::ProtocolVersion version = kmipcore::KMIP_VERSION_1_4,
         const std::shared_ptr<kmipcore::Logger> &logger = {},
         NetClient::TlsVerificationOptions tls_verification = {false, false},
-        bool close_on_destroy = true
+        bool close_on_destroy = true,
+        NetClient::TlsProtocolOptions tls_protocol = {}
     )
       : m_net_client(
             std::make_shared<NetClientOpenSSL>(
@@ -69,7 +72,8 @@ namespace kmipclient {
                 clientKeyFn,
                 serverCaCertFn,
                 timeout_ms,
-                tls_verification
+                tls_verification,
+                tls_protocol
             )
         ),
         m_client(m_net_client, logger, version, close_on_destroy) {
@@ -147,7 +151,8 @@ namespace kmipclient {
         kmipcore::ProtocolVersion version = kmipcore::KMIP_VERSION_1_4,
         const std::shared_ptr<kmipcore::Logger> &logger = {},
         NetClient::TlsVerificationOptions tls_verification = {false, false},
-        bool close_on_destroy = true
+        bool close_on_destroy = true,
+        NetClient::TlsProtocolOptions tls_protocol = {}
     ) {
       return std::make_shared<Kmip>(
           host,
@@ -159,7 +164,8 @@ namespace kmipclient {
           version,
           logger,
           tls_verification,
-          close_on_destroy
+          close_on_destroy,
+          tls_protocol
       );
     }
 

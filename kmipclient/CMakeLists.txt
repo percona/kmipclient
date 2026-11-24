@@ -131,6 +131,11 @@ if(BUILD_TESTS)
     tests/KmipClientPoolIntegrationTest.cpp
   )
 
+  # Spawns openssl s_server via fork/exec
+  if(NOT WIN32)
+    target_sources(kmipclient_test PRIVATE tests/NetClientTlsOptionsTest.cpp)
+  endif()
+
   target_link_libraries(
     kmipclient_test
     PRIVATE
