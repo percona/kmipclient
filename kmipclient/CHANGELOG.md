@@ -1,3 +1,11 @@
+Unreleased
+
+    NetClientOpenSSL::connect(), and so Kmip and KmipClientPool, throws
+    KmipIOException ("KMIP server host name must not be empty") when the
+    host is empty or names no host (":", ":5696", "[]", "*", or a string
+    with a NUL byte), whatever the TLS options. OpenSSL used to connect
+    such a host to the local host.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
