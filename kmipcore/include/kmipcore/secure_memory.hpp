@@ -94,11 +94,16 @@ namespace kmipcore {
    * A std::basic_string with @ref secure_allocator, so heap storage is
    * zeroed when it is freed. Short values (up to 15 characters with
    * libstdc++, 22 with libc++) live in a buffer inside the string object
-   * instead, which the allocator never sees: the destructor and the move
-   * operations zero that buffer too, so no copy of the value is left in the
-   * object once it is destroyed or moved from. While it is alive, clear(), a
-   * shorter assignment or growth to the heap may leave bytes in the inline
-   * buffer until then; wipe() removes them at once.
+   * instead, which the allocator never sees: the destructor, the move
+   * constructors and assignments, assign() from an rvalue and swap() zero
+   * that buffer too, so no copy of the value is left in the object once it
+   * is destroyed or moved from. While it is alive, clear(), a shorter
+   * assignment or growth to the heap may leave bytes in the inline buffer
+   * until then; wipe() removes them at once.
+   *
+   * Moving from a base_type rvalue (a string with the same allocator) wipes
+   * that string as well. A std::string has a different allocator: it is
+   * copied, not moved, and stays as it was; wiping it is up to its owner.
    *
    * Use it as a std::basic_string, with these limits:
    * - Do not destroy it through a pointer to the base class, and do not slice
@@ -122,27 +127,57 @@ namespace kmipcore {
       other.wipe();
     }
     secure_string(const base_type &other) : base_type(other) {}
+    /** Takes the value of a base_type rvalue and wipes that string. */
     secure_string(base_type &&other) noexcept : base_type(std::move(other)) {
       wipe(other);
     }
+    // Allocator-extended moves: they hide the inherited one, which does not
+    // wipe the source. The secure_string&& overloads of these and of
+    // assign() must be exact matches: otherwise libc++ prefers its
+    // string_view template, taking const T&, and copies.
+    secure_string(base_type &&other, const allocator_type &alloc)
+      : base_type(std::move(other), alloc) {
+      wipe(other);
+    }
+    secure_string(secure_string &&other, const allocator_type &alloc)
+      : secure_string(static_cast<base_type &&>(other), alloc) {}
 
     secure_string &operator=(const secure_string &) = default;
     secure_string &operator=(secure_string &&other) noexcept {
-      if (this != &other) {
+      return *this = static_cast<base_type &&>(other);
+    }
+    using base_type::operator=;
+    /** Takes the value of a base_type rvalue and wipes that string. */
+    secure_string &operator=(base_type &&other) noexcept {
+      if (static_cast<base_type *>(this) != &other) {
         wipe();
-        base_type::operator=(std::move(static_cast<base_type &>(other)));
-        other.wipe();
+        base_type::operator=(std::move(other));
+        wipe(other);
       }
       return *this;
     }
-    using base_type::operator=;
-    /** Takes the value of a plain string and wipes that string. */
-    secure_string &operator=(base_type &&other) noexcept {
-      wipe();
-      base_type::operator=(std::move(other));
-      wipe(other);
-      return *this;
+
+    using base_type::assign;
+    /** Like operator=(base_type &&): wipes the moved-from string. */
+    secure_string &assign(base_type &&other) noexcept {
+      return *this = std::move(other);
     }
+    secure_string &assign(secure_string &&other) noexcept {
+      return *this = static_cast<base_type &&>(other);
+    }
+
+    /**
+     * Swaps through moves that wipe what they leave behind; the inherited
+     * swap() may copy a short value through an unwiped temporary.
+     */
+    void swap(secure_string &other) noexcept {
+      if (this != &other) {
+        secure_string tmp(std::move(other));
+        other = std::move(*this);
+        *this = std::move(tmp);
+      }
+    }
+    friend void swap(secure_string &a, secure_string &b) noexcept { a.swap(b); }
 
     ~secure_string() { wipe(); }
 
@@ -152,12 +187,18 @@ namespace kmipcore {
   private:
     // Empties the string and makes it use its inline buffer again:
     // shrink_to_fit() of an empty string releases heap storage through
-    // secure_allocator, which zeroes it. Then zeroes the buffer in use (the
-    // inline one, or the heap block if the library kept it).
+    // secure_allocator, which zeroes it. shrink_to_fit() is only a request
+    // and is not noexcept in the standard; libstdc++, libc++ and MSVC honour
+    // it for an empty string without allocating. Then zeroes the buffer in
+    // use (the inline one, or the heap block if it was kept). Growing to the
+    // capacity first keeps the zeroing inside [data(), data() + size()], the
+    // only range data() gives access to; it does not reallocate.
     static void wipe(base_type &s) noexcept {
       s.clear();
       s.shrink_to_fit();
-      secure_clear(s.data(), s.capacity() + 1);
+      s.resize(s.capacity());
+      secure_clear(s.data(), s.size());
+      s.clear();
     }
   };
 
