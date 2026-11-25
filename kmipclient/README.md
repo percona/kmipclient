@@ -538,7 +538,7 @@ KmipClient client(net_client);
 
 try {
   auto key = client.op_get_key(id, /*all_attributes=*/true);
-  // key->value()               → raw key bytes (std::vector<uint8_t>)
+  // key->value()               → raw key bytes (const kmipcore::secure_bytes &)
   // key->algorithm()           → cryptographic_algorithm enum
   // key->usage_mask()          → cryptographic_usage_mask flags
   // key->attribute_value(name) → attribute string, "" if absent (noexcept)

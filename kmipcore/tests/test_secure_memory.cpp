@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -26,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 using namespace kmipcore;
@@ -97,15 +99,26 @@ namespace {
   }
 
   // operator new stores the block size in front of the block so that
-  // operator delete can scan the whole block, also for unsized deletes.
-  constexpr std::size_t kBlockHeader = alignof(std::max_align_t);
+  // operator delete can scan the whole block, also for unsized deletes. The
+  // header keeps the alignment operator new guarantees, which on some
+  // platforms (macOS arm64, Windows x64) is larger than max_align_t's.
+  constexpr std::size_t kBlockHeader = std::max<std::size_t>(
+      {alignof(std::max_align_t), __STDCPP_DEFAULT_NEW_ALIGNMENT__}
+  );
+
+  // Filled with a pattern, so the scan never reads bytes no one wrote.
+  constexpr unsigned char kFreshBlockByte = 0xA5;
 
   void *allocate_block(std::size_t n) {
+    if (n > SIZE_MAX - kBlockHeader) {
+      throw std::bad_alloc();
+    }
     auto *raw = static_cast<unsigned char *>(std::malloc(kBlockHeader + n));
     if (raw == nullptr) {
       throw std::bad_alloc();
     }
     *reinterpret_cast<std::size_t *>(raw) = n;
+    std::memset(raw + kBlockHeader, kFreshBlockByte, n);
     return raw + kBlockHeader;
   }
 
@@ -170,10 +183,55 @@ void testHeterogeneousStringCompare() {
 
   EXPECT(secure == plain);
   EXPECT(plain == secure);
-  EXPECT(secure == "s3cr3t");  // basic_string vs const char*
   EXPECT(secure != std::string("other"));
+  EXPECT(std::string("other") != secure);
+  EXPECT(secure == "s3cr3t");
+  EXPECT("s3cr3t" == secure);
+  EXPECT(secure != "other");
+  EXPECT("other" != secure);
+  EXPECT(!(secure != "s3cr3t"));
+  EXPECT(!("s3cr3t" != secure));
 
   std::cout << "testHeterogeneousStringCompare passed" << std::endl;
+}
+
+void testSecureStringHashAndBaseCopy() {
+  // An embedded NUL: the hash covers the whole value, like string_view's.
+  const std::string_view value("ab\0cd", 5);
+  const secure_string s(value);
+  EXPECT(s.size() == 5);
+  EXPECT(std::hash<secure_string>{}(s) == std::hash<std::string_view>{}(value));
+
+  std::unordered_set<secure_string> set;
+  set.insert(s);
+  set.insert(secure_string("other"));
+  EXPECT(set.size() == 2);
+  EXPECT(set.count(secure_string(value)) == 1);
+  EXPECT(set.count(secure_string("ab")) == 0);
+
+  // Copy from the base string, which is left as it was.
+  const secure_string::base_type base("copied value");
+  const secure_string copy(base);
+  EXPECT(copy == "copied value");
+  EXPECT(base == "copied value");
+
+  std::cout << "testSecureStringHashAndBaseCopy passed" << std::endl;
+}
+
+// Reads bytes past a container's size(), in its retained capacity. ASan
+// container annotations (libc++) report such reads, so they are exempt here.
+#if defined(_MSC_VER) && !defined(__clang__)
+  #define KMIP_NO_SANITIZE_ADDRESS __declspec(no_sanitize_address)
+#else
+  #define KMIP_NO_SANITIZE_ADDRESS __attribute__((no_sanitize_address))
+#endif
+KMIP_NO_SANITIZE_ADDRESS bool all_zero_past_size(const uint8_t *p, size_t n) {
+  for (size_t i = 0; i < n; ++i) {
+    if (p[i] != 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // F12: release() must scrub the bytes left behind in the retained capacity.
@@ -197,14 +255,7 @@ void testReleaseScrubsRetainedCapacity() {
 
   // ... but the buffer's retained capacity has been zeroed.
   EXPECT(buf.size() == 0);
-  bool all_zero = true;
-  for (size_t i = 0; i < written; ++i) {
-    if (storage[i] != 0) {
-      all_zero = false;
-      break;
-    }
-  }
-  EXPECT(all_zero);
+  EXPECT(all_zero_past_size(storage, written));
 
   std::cout << "testReleaseScrubsRetainedCapacity passed" << std::endl;
 }
@@ -373,6 +424,43 @@ void testSecureStringCopyAssignedAndSwappedAreWiped() {
 
   std::cout << "testSecureStringCopyAssignedAndSwappedAreWiped passed"
             << std::endl;
+}
+
+void testSecureStringAssignAndAllocatorMoveWipe() {
+  alignas(secure_string) StringStorage from{};
+  {
+    auto *a = new (from.data()) secure_string(kShortSecret);
+    secure_string b("other value");
+    b.assign(std::move(*a));
+    EXPECT(b == kShortSecret);
+    EXPECT(!storage_holds(from, kShortSecret));
+    a->~secure_string();
+  }
+  {
+    auto *a = new (from.data()) secure_string(kShortSecret);
+    const secure_string b(std::move(*a), secure_string::allocator_type{});
+    EXPECT(b == kShortSecret);
+    EXPECT(!storage_holds(from, kShortSecret));
+    a->~secure_string();
+  }
+  {
+    // Moving a string into itself through a base_type reference keeps it.
+    secure_string s("abc");
+    s = std::move(s.append("!"));
+    EXPECT(s == "abc!");
+    s.assign(std::move(static_cast<secure_string::base_type &>(s)));
+    EXPECT(s == "abc!");
+  }
+  {
+    secure_string a(kShortSecret);
+    secure_string b("other value");
+    swap(a, b);
+    EXPECT(a == "other value" && b == kShortSecret);
+    a.swap(a);
+    EXPECT(a == "other value");
+  }
+
+  std::cout << "testSecureStringAssignAndAllocatorMoveWipe passed" << std::endl;
 }
 
 void testSecureStringWipeEmptiesAndZeroes() {
@@ -686,6 +774,61 @@ void testPasswordLeavesNoPlainCopy() {
   std::cout << "testPasswordLeavesNoPlainCopy passed" << std::endl;
 }
 
+void testBigIntegerLeavesNoPlainCopy() {
+  expect_no_unwiped_frees([](std::span<const unsigned char> secret) {
+    // A round trip, both accessors and the formatter (which redacts Key
+    // Material and reads only its length).
+    const auto element =
+        Element::createBigInteger(tag::KMIP_TAG_KEY_MATERIAL, secret);
+    EXPECT(std::ranges::equal(element->bytesView(), secret));
+    EXPECT(!format_element(element).empty());
+
+    SerializationBuffer buf;
+    element->serialize(buf);
+    const auto bytes = buf.release();
+    EXPECT(contains(bytes, secret));
+    std::size_t offset = 0;
+    const auto parsed = Element::deserialize(bytes, offset);
+    EXPECT(parsed->type == static_cast<Type>(KMIP_TYPE_BIG_INTEGER));
+    EXPECT(std::ranges::equal(parsed->bytesView(), secret));
+    EXPECT(!format_element(parsed).empty());
+  });
+
+  // The braced-list overload, and the formatter's unredacted branch.
+  const auto listed = Element::createBigInteger(
+      tag::KMIP_TAG_CRYPTOGRAPHIC_LENGTH, {0x01, 0x02}
+  );
+  EXPECT(listed->bytesView().size() == 2 && listed->bytesView()[1] == 0x02);
+  // toBytes() is the documented plain copy, so it is checked outside a scan.
+  EXPECT(listed->toBytes() == std::vector<uint8_t>({0x01, 0x02}));
+  EXPECT(format_element(listed).find("len=2") != std::string::npos);
+
+  std::cout << "testBigIntegerLeavesNoPlainCopy passed" << std::endl;
+}
+
+void testViewsRejectOtherTypes() {
+  const auto expect_throws = [](auto &&f) {
+    bool threw = false;
+    try {
+      f();
+    } catch (const KmipException &) {
+      threw = true;
+    }
+    EXPECT(threw);
+  };
+  const auto text = Element::createTextString(tag::KMIP_TAG_PASSWORD, "pw");
+  const auto bytes =
+      Element::createByteString(tag::KMIP_TAG_KEY_MATERIAL, {0x01, 0x02});
+  const auto number =
+      Element::createInteger(tag::KMIP_TAG_CRYPTOGRAPHIC_LENGTH, 128);
+  expect_throws([&] { (void) text->bytesView(); });
+  expect_throws([&] { (void) number->bytesView(); });
+  expect_throws([&] { (void) bytes->stringView(); });
+  expect_throws([&] { (void) number->stringView(); });
+
+  std::cout << "testViewsRejectOtherTypes passed" << std::endl;
+}
+
 int main() {
   std::cout << "Running secure_memory tests..." << std::endl;
 
@@ -693,6 +836,7 @@ int main() {
     testSecureClearZeroes();
     testHeterogeneousByteCompare();
     testHeterogeneousStringCompare();
+    testSecureStringHashAndBaseCopy();
     testReleaseScrubsRetainedCapacity();
     testShrinkReleasesCapacity();
     testSecureBytesScrubbedOnDestruction();
@@ -703,6 +847,7 @@ int main() {
     testSecureStringMovedFromIsWiped();
     testSecureStringMoveAssignmentWipesTheOldValue();
     testSecureStringCopyAssignedAndSwappedAreWiped();
+    testSecureStringAssignAndAllocatorMoveWipe();
     testSecureStringWipeEmptiesAndZeroes();
     testSecureStringTakingABaseRvalueWipesIt();
     testGetKeyLeavesNoPlainCopy();
@@ -711,6 +856,8 @@ int main() {
     testRegisterSecretLeavesNoPlainCopy();
     testTextStringLeavesNoPlainCopy();
     testPasswordLeavesNoPlainCopy();
+    testBigIntegerLeavesNoPlainCopy();
+    testViewsRejectOtherTypes();
 
     std::cout << "All secure_memory tests passed" << std::endl;
     return 0;

@@ -10,9 +10,11 @@ Unreleased
     std::span<const uint8_t> or a braced list of bytes instead of
     const std::vector<uint8_t>&; calls with a vector still compile.
     kmipcore::secure_string is now a class derived from std::basic_string
-    (it was an alias): its destructor, move operations and assignment from
-    a plain string rvalue also zero the buffer inside the object that holds
-    short values, which the allocator never sees. New:
+    (it was an alias): its destructor, move constructors and assignments,
+    assign() from an rvalue and swap() also zero the buffer inside the
+    object that holds short values, which the allocator never sees. Moving
+    from a secure_string::base_type rvalue wipes that string too; a
+    std::string is copied and left as it was. New:
     secure_string::wipe() and std::hash<secure_string>. Source changes: do
     not destroy or slice a secure_string through its base class; operator+
     and substr() return the plain base string; the inherited mutators
