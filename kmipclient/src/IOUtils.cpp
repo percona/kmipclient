@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 
@@ -28,7 +29,44 @@ namespace kmipclient {
              static_cast<int32_t>(bytes[3]);
     }
 
+    // Sets the exchange deadline on the connection, keeping an earlier one
+    // the caller set, and restores the previous value on every way out of
+    // the exchange.
+    class ExchangeDeadline {
+    public:
+      explicit ExchangeDeadline(NetClient &nc)
+        : nc_(nc), previous_(nc.io_deadline()) {
+        if (nc_.timeout_ms() > 0) {
+          auto deadline = NetClient::Clock::now() +
+                          std::chrono::milliseconds(nc_.timeout_ms());
+          if (previous_ && *previous_ < deadline) {
+            deadline = *previous_;
+          }
+          nc_.set_io_deadline(deadline);
+        }
+      }
+      ~ExchangeDeadline() { nc_.set_io_deadline(previous_); }
+      ExchangeDeadline(const ExchangeDeadline &) = delete;
+      ExchangeDeadline &operator=(const ExchangeDeadline &) = delete;
+
+    private:
+      NetClient &nc_;
+      std::optional<NetClient::Clock::time_point> previous_;
+    };
+
   }  // namespace
+
+  void IOUtils::check_deadline(const char *op) const {
+    // NetClientOpenSSL also bounds each call by the deadline; this check
+    // covers NetClient implementations that only bound a single call.
+    const auto deadline = net_client.io_deadline();
+    if (deadline && NetClient::Clock::now() >= *deadline) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          std::string("KMIP ") + op + " timed out: exchange deadline passed"
+      );
+    }
+  }
 
   void IOUtils::log_debug(
       const char *event, std::span<const uint8_t> ttlv
@@ -54,14 +92,9 @@ namespace kmipclient {
 
   void IOUtils::send(std::span<const uint8_t> request_bytes) const {
     const int dlen = static_cast<int>(request_bytes.size());
-    if (dlen <= 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, "Can not send empty KMIP request."
-      );
-    }
-
     int total_sent = 0;
     while (total_sent < dlen) {
+      check_deadline("send");
       const int sent = net_client.send(
           request_bytes.subspan(static_cast<size_t>(total_sent))
       );
@@ -79,6 +112,7 @@ namespace kmipclient {
     int total_read = 0;
     const int n = static_cast<int>(buf.size());
     while (total_read < n) {
+      check_deadline("receive");
       const int received =
           net_client.recv(buf.subspan(static_cast<size_t>(total_read)));
       if (received <= 0) {
@@ -89,6 +123,9 @@ namespace kmipclient {
       }
       total_read += received;
     }
+    // A NetClient that bounds only single calls may return the last bytes
+    // after the deadline.
+    check_deadline("receive");
   }
 
   kmipcore::secure_bytes IOUtils::receive_message(size_t max_message_size) {
@@ -127,8 +164,23 @@ namespace kmipclient {
   ) {
     try {
       log_debug("request", request_bytes);
-      send(request_bytes);
-      response_bytes = receive_message(max_message_size);
+      if (request_bytes.empty()) {
+        throw KmipIOException(
+            kmipcore::KMIP_IO_FAILURE, "Can not send empty KMIP request."
+        );
+      }
+      // Reconnecting after an earlier failure has its own timeout_ms and is
+      // not part of the exchange.
+      if (!net_client.is_connected() && !net_client.connect()) {
+        throw KmipIOException(
+            kmipcore::KMIP_IO_FAILURE, "Can not connect to the KMIP server."
+        );
+      }
+      {
+        const ExchangeDeadline deadline(net_client);
+        send(request_bytes);
+        response_bytes = receive_message(max_message_size);
+      }
       log_debug("response", response_bytes);
     } catch (const KmipIOException &) {
       // Mark the underlying connection as dead so the pool (via

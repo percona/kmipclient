@@ -39,7 +39,8 @@ namespace kmipclient {
      * @param clientCertificateFn Path to client X.509 certificate in PEM.
      * @param clientKeyFn Path to client private key in PEM.
      * @param serverCaCertFn Path to trusted server CA/certificate in PEM.
-     * @param timeout_ms Connect/read/write timeout in milliseconds.
+     * @param timeout_ms Timeout in milliseconds for connecting (TCP and TLS
+     *        together) and for each request/response exchange as a whole.
      * @param version KMIP protocol version to use for requests.
      * @param logger Optional KMIP protocol logger.
      * @param tls_verification TLS peer/hostname verification settings applied

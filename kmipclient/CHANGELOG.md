@@ -1,3 +1,23 @@
+Unreleased
+
+    timeout_ms bounds each request/response exchange as a whole, not each
+    socket read: an exchange fails with KmipIOException ("timed out") when it
+    has not completed timeout_ms after it started. So timeout_ms must cover
+    the largest expected response; the NetClientOpenSSL default stays 500 ms.
+    Reconnecting after a failed exchange has its own timeout_ms.
+    New: NetClient::set_io_deadline() (virtual), io_deadline() and
+    timeout_ms(). NetClient::is_connected() is now virtual. A custom
+    NetClient should not block past io_deadline() in send() and recv(), and
+    its connect() and close() must keep m_isConnected up to date: the client
+    now calls connect() before an exchange when is_connected() is false. One
+    that wraps another NetClient should override set_io_deadline() to call
+    the base version and forward the deadline, and is_connected() to return
+    the wrapped client's state.
+    NetClientOpenSSL::send() and recv() clear the thread's OpenSSL error
+    queue.
+    NetClient has a new data member and new virtual functions, so code built
+    against an earlier version must be rebuilt.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
