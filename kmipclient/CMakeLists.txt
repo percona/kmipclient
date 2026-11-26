@@ -18,6 +18,7 @@ add_library(
   src/KmipClientPool.cpp
   include/kmipclient/NetClient.hpp
   src/NetClientOpenSSL.cpp
+  src/BioDeadline.hpp
   include/kmipclient/NetClientOpenSSL.hpp
   include/kmipclient/types.hpp
   src/IOUtils.cpp

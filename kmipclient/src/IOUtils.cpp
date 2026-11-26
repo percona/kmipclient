@@ -92,12 +92,6 @@ namespace kmipclient {
 
   void IOUtils::send(std::span<const uint8_t> request_bytes) const {
     const int dlen = static_cast<int>(request_bytes.size());
-    if (dlen <= 0) {
-      throw KmipIOException(
-          kmipcore::KMIP_IO_FAILURE, "Can not send empty KMIP request."
-      );
-    }
-
     int total_sent = 0;
     while (total_sent < dlen) {
       check_deadline("send");
@@ -129,6 +123,9 @@ namespace kmipclient {
       }
       total_read += received;
     }
+    // A NetClient that bounds only single calls may return the last bytes
+    // after the deadline.
+    check_deadline("receive");
   }
 
   kmipcore::secure_bytes IOUtils::receive_message(size_t max_message_size) {
@@ -167,6 +164,11 @@ namespace kmipclient {
   ) {
     try {
       log_debug("request", request_bytes);
+      if (request_bytes.empty()) {
+        throw KmipIOException(
+            kmipcore::KMIP_IO_FAILURE, "Can not send empty KMIP request."
+        );
+      }
       // Reconnecting after an earlier failure has its own timeout_ms and is
       // not part of the exchange.
       if (!net_client.is_connected() && !net_client.connect()) {

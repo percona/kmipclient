@@ -7,10 +7,13 @@
 
 #include "kmipclient/NetClientOpenSSL.hpp"
 
+#include "BioDeadline.hpp"
 #include "kmipclient/KmipIOException.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstring>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -215,25 +218,13 @@ namespace kmipclient {
     }
   }
 
-  // Waits until the SSL BIO can make forward progress, bounded by deadline.
-  // exchange_deadline: the deadline is the one set around a request/response
-  // exchange (possibly by the caller), not now + timeout_ms; the message then
-  // does not quote timeout_ms.
-  static void wait_for_bio_retry(
+  void detail::wait_for_bio_retry(
       BIO *bio,
-      const std::chrono::steady_clock::time_point &deadline,
+      NetClient::Clock::time_point deadline,
       const char *op,
       int timeout_ms,
-      bool exchange_deadline = false
+      bool exchange_deadline
   ) {
-    const auto timed_out = [&] {
-      return KmipIOException(
-          kmipcore::KMIP_IO_FAILURE,
-          exchange_deadline ? std::string("KMIP ") + op +
-                                  " timed out: exchange deadline passed"
-                            : timeoutMessage(op, timeout_ms)
-      );
-    };
     int fd = -1;
     if (BIO_get_fd(bio, &fd) < 0 || fd < 0) {
       throw KmipIOException(
@@ -242,17 +233,21 @@ namespace kmipclient {
       );
     }
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = NetClient::Clock::now();
     if (now >= deadline) {
-      throw timed_out();
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          exchange_deadline ? std::string("KMIP ") + op +
+                                  " timed out: exchange deadline passed"
+                            : timeoutMessage(op, timeout_ms)
+      );
     }
-
-    auto remaining_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
-            .count();
-    if (remaining_ms <= 0) {
-      remaining_ms = 1;
-    }
+    // Rounded up, so that poll() does not return before the deadline, and
+    // at most INT_MAX ms, which poll() takes as an int.
+    const int wait_ms = static_cast<int>(std::min<long long>(
+        std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count(),
+        INT_MAX
+    ));
 
 #ifdef _WIN32
     WSAPOLLFD pfd{};
@@ -271,18 +266,14 @@ namespace kmipclient {
       pfd.events = POLLIN | POLLOUT;
     }
 
-    int poll_ret = 0;
 #ifdef _WIN32
-    poll_ret = WSAPoll(&pfd, 1, static_cast<int>(remaining_ms));
+    const int poll_ret = WSAPoll(&pfd, 1, wait_ms);
 #else
-    do {
-      poll_ret = poll(&pfd, 1, static_cast<int>(remaining_ms));
-    } while (poll_ret < 0 && errno == EINTR);
-#endif
-
-    if (poll_ret == 0) {
-      throw timed_out();
+    const int poll_ret = poll(&pfd, 1, wait_ms);
+    if (poll_ret < 0 && errno == EINTR) {
+      return;  // the caller retries and waits for the rest
     }
+#endif
     if (poll_ret < 0) {
       throw KmipIOException(
           kmipcore::KMIP_IO_FAILURE,
@@ -290,6 +281,8 @@ namespace kmipclient {
               socket_error_string(last_socket_error())
       );
     }
+    // Ready, or the wait ended (poll_ret == 0): the caller's retry either
+    // makes progress or comes back here and finds the deadline passed.
   }
 
   bool NetClientOpenSSL::checkConnected() {
@@ -401,9 +394,13 @@ namespace kmipclient {
 
     if (m_timeout_ms <= 0) {
       // Blocking socket: let one BIO_read() skip non-application records.
-      // With a timeout the retry loop in send()/recv() does that, checking
-      // the deadline between records.
       SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+    } else {
+      // OpenSSL 1.1.1 and later set this mode by default. Without it,
+      // SSL_read() returns after each non-application record (such as a
+      // NewSessionTicket or KeyUpdate), and the retry loop in send()/recv()
+      // checks the deadline between records.
+      SSL_clear_mode(ssl, SSL_MODE_AUTO_RETRY);
     }
     BIO_set_conn_hostname(new_bio.get(), m_host.c_str());
     BIO_set_conn_port(new_bio.get(), m_port.c_str());
@@ -431,7 +428,7 @@ namespace kmipclient {
           );
         }
 
-        wait_for_bio_retry(
+        detail::wait_for_bio_retry(
             new_bio.get(), deadline, "connect/handshake", m_timeout_ms
         );
       }
@@ -462,47 +459,12 @@ namespace kmipclient {
     ctx_.reset();
   }
 
-  // With a timeout the socket is non-blocking: retry until the operation
-  // makes progress, waiting with poll() no longer than the deadline (the
-  // exchange deadline when one is set, else timeout_ms from now). This
-  // bounds the call however slowly the peer sends or reads, also while
-  // OpenSSL assembles one TLS record from many socket reads.
-  template<typename Io>
-  static int io_with_deadline(
-      BIO *bio,
-      std::optional<NetClient::Clock::time_point> io_deadline,
-      int timeout_ms,
-      const char *op,
-      Io &&io
-  ) {
-    if (timeout_ms <= 0) {
-      return io();  // blocking socket, no timeout
-    }
-    const auto deadline = io_deadline.value_or(
-        NetClient::Clock::now() + std::chrono::milliseconds(timeout_ms)
-    );
-    for (;;) {
-      ERR_clear_error();
-      const int ret = io();
-      // A retry that waits for neither reading nor writing is not expected
-      // after the handshake; report it instead of polling until the
-      // deadline.
-      if (ret > 0 || !BIO_should_retry(bio) ||
-          (!BIO_should_read(bio) && !BIO_should_write(bio))) {
-        return ret;
-      }
-      wait_for_bio_retry(
-          bio, deadline, op, timeout_ms, io_deadline.has_value()
-      );
-    }
-  }
-
   int NetClientOpenSSL::send(std::span<const std::uint8_t> data) {
     if (!checkConnected()) {
       return -1;
     }
     const int dlen = static_cast<int>(data.size());
-    return io_with_deadline(
+    return detail::io_with_deadline(
         bio_.get(), m_io_deadline, m_timeout_ms, "send", [&] {
           return BIO_write(bio_.get(), data.data(), dlen);
         }
@@ -514,7 +476,7 @@ namespace kmipclient {
       return -1;
     }
     const int dlen = static_cast<int>(data.size());
-    return io_with_deadline(
+    return detail::io_with_deadline(
         bio_.get(), m_io_deadline, m_timeout_ms, "receive", [&] {
           return BIO_read(bio_.get(), data.data(), dlen);
         }

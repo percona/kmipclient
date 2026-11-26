@@ -26,7 +26,11 @@ namespace kmipclient {
    */
   class NetClientOpenSSL : public NetClient {
   public:
-    /** Default transport timeout (connect/handshake/read/write), in ms. */
+    /**
+     * Default transport timeout (connect/handshake, and each exchange), in
+     * ms. An exchange must deliver the whole response in this time: pass a
+     * larger timeout_ms for large responses or slow links.
+     */
     static constexpr int DEFAULT_TIMEOUT_MS = 500;
 
     /**
@@ -75,14 +79,22 @@ namespace kmipclient {
     void close() override;
     /**
      * @brief Sends raw bytes through the TLS channel.
+     *
+     * With a positive timeout_ms, waits no longer than io_deadline(), or
+     * timeout_ms when no deadline is set, and clears the calling thread's
+     * OpenSSL error queue (ERR_clear_error()) before each attempt.
      * @param data Source buffer.
      * @return Number of bytes sent, or -1 on failure.
+     * @throws KmipIOException when the wait times out.
      */
     int send(std::span<const std::uint8_t> data) override;
     /**
      * @brief Receives raw bytes through the TLS channel.
+     *
+     * Waits and clears the OpenSSL error queue as @ref send does.
      * @param data Destination buffer.
      * @return Number of bytes read, or -1 on failure.
+     * @throws KmipIOException when the wait times out.
      */
     int recv(std::span<std::uint8_t> data) override;
 

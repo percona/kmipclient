@@ -76,10 +76,12 @@ namespace kmipclient {
     /**
      * @brief Establishes network/TLS connection to the KMIP server.
      *        Must honor @ref m_timeout_ms for connect + handshake phases.
+     *        Must set @ref m_isConnected on success (see @ref is_connected).
      * @return true on successful connection establishment, false otherwise.
      */
     virtual bool connect() = 0;
-    /** @brief Closes the connection and releases underlying resources. */
+    /** @brief Closes the connection and releases underlying resources.
+     *        Must clear @ref m_isConnected. */
     virtual void close() = 0;
 
     /**
@@ -102,9 +104,17 @@ namespace kmipclient {
 
     /**
      * @brief Checks whether a connection is currently established.
+     *
+     * The client calls connect() before an exchange when this returns false,
+     * and the pool discards a connection that returns false. The default
+     * returns @ref m_isConnected, which connect() and close() keep up to
+     * date. A NetClient that wraps another one should override this to
+     * return the wrapped client's state.
      * @return true when connected, false otherwise.
      */
-    [[nodiscard]] bool is_connected() const noexcept { return m_isConnected; }
+    [[nodiscard]] virtual bool is_connected() const noexcept {
+      return m_isConnected;
+    }
 
     /** @brief Clock of @ref set_io_deadline. */
     using Clock = std::chrono::steady_clock;

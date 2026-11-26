@@ -43,7 +43,7 @@ namespace kmipclient {
     /**
      * Reads exactly n bytes from the network into the buffer.
      * Throws KmipException on error, premature EOF or when the exchange
-     * deadline passes.
+     * deadline passes, also when the last bytes arrive after it.
      */
     void read_exact(std::span<uint8_t> buf);
 
