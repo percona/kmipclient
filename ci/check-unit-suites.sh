@@ -6,7 +6,7 @@ set -euo pipefail
 log="${1:?usage: check-unit-suites.sh <LastTest.log>}"
 
 status=0
-for suite in kmip_core_test kmip_parser_test kmip_serialization_buffer_test IOUtilsTest LocatePagingTest GetKeyFormatTest \
+for suite in kmip_core_test kmip_parser_test kmip_serialization_buffer_test IOUtilsTest LocatePagingTest TlsTestServerTest GetKeyFormatTest \
   EncodingTest KeyReaderTest KeyWriterTest KeyGeneratorTest; do
   if ! grep -q "$suite" "$log"; then
     echo "::error::unit suite $suite did not run"
