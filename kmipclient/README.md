@@ -150,6 +150,13 @@ auto client = KmipClient::create_shared(transport, logger);
 // client is std::shared_ptr<KmipClient>
 ```
 
+`timeout_ms` bounds the TCP connect and TLS handshake together, and then each
+request/response exchange as a whole: an operation fails with
+`KmipIOException` ("timed out") when the server has not delivered the whole
+response by then, however it spreads the bytes over time. Operations that
+make several exchanges (for example paged `op_all`) get `timeout_ms` for each.
+A value of 0 or less means no timeout.
+
 Copy and move are disabled on `KmipClient` itself, but shared-handle usage is
 supported via `KmipClient::create_shared(...)` for pointer-centric integrations
 (such as migrations from `kmippp::context`).

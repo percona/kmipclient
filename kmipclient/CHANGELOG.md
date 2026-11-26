@@ -1,3 +1,17 @@
+Unreleased
+
+    timeout_ms bounds each request/response exchange as a whole, not each
+    socket read: an exchange fails with KmipIOException ("timed out") when it
+    has not completed timeout_ms after it started. Reconnecting after a
+    failed exchange has its own timeout_ms.
+    New: NetClient::set_io_deadline() (virtual), io_deadline() and
+    timeout_ms(). A custom NetClient should not block past io_deadline() in
+    send() and recv(); one that wraps another NetClient should override
+    set_io_deadline() to call the base version and forward the deadline.
+    NetClient has a new data member and virtual function, so code built
+    against an earlier version must be
+    rebuilt.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the

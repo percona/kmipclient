@@ -16,10 +16,13 @@
 #include "kmipcore/serialization_buffer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -85,6 +88,48 @@ namespace {
   private:
     int send_plan_index = 0;
     size_t recv_offset = 0;
+  };
+
+  // Returns one byte per recv() after a pause, and records the deadline it
+  // sees on every call.
+  class TricklingNetClient final : public kmipclient::NetClient {
+  public:
+    TricklingNetClient(int timeout_ms, std::chrono::milliseconds per_byte)
+      : NetClient("host", "5696", "c.pem", "c.key", "ca.pem", timeout_ms),
+        per_byte_(per_byte) {}
+
+    bool connect() override {
+      std::this_thread::sleep_for(connect_delay);
+      m_isConnected = true;
+      return true;
+    }
+    void close() override { m_isConnected = false; }
+
+    int send(std::span<const std::uint8_t> data) override {
+      if (!is_connected()) {
+        connect();  // as NetClientOpenSSL does
+      }
+      deadlines_seen.push_back(io_deadline());
+      return static_cast<int>(data.size());
+    }
+
+    int recv(std::span<std::uint8_t> data) override {
+      deadlines_seen.push_back(io_deadline());
+      if (data.empty() || offset_ >= response_bytes.size()) {
+        return 0;
+      }
+      std::this_thread::sleep_for(per_byte_);
+      data[0] = response_bytes[offset_++];
+      return 1;
+    }
+
+    std::vector<uint8_t> response_bytes;
+    std::vector<std::optional<Clock::time_point>> deadlines_seen;
+    std::chrono::milliseconds connect_delay{0};
+
+  private:
+    std::chrono::milliseconds per_byte_;
+    size_t offset_ = 0;
   };
 
   std::vector<uint8_t>
@@ -218,6 +263,60 @@ TEST(
         std::string::npos
     );
   }
+}
+
+TEST(IOUtilsTest, TimeoutBoundsTheWholeExchange) {
+  // 400 bytes at 5 ms each take 2 s; every single call is far below the
+  // 200 ms timeout, so only a deadline for the whole exchange stops it.
+  TricklingNetClient nc(200, std::chrono::milliseconds(5));
+  nc.response_bytes = build_response_with_payload(std::vector<uint8_t>(392));
+  kmipclient::IOUtils io(nc);
+  kmipcore::secure_bytes response;
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THROW(
+      io.do_exchange(std::vector<uint8_t>{0, 1, 2, 3}, response, 1 << 20),
+      kmipclient::KmipIOException
+  );
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+
+  // One deadline, the same on every call, cleared afterwards.
+  ASSERT_TRUE(nc.deadlines_seen.front().has_value());
+  for (const auto &deadline : nc.deadlines_seen) {
+    EXPECT_EQ(deadline, nc.deadlines_seen.front());
+  }
+  EXPECT_FALSE(nc.io_deadline().has_value());
+}
+
+TEST(IOUtilsTest, ReconnectIsNotPartOfTheExchange) {
+  // The reconnect takes 900 ms and the response about 135 ms: this fits in
+  // the 1000 ms timeout only if the deadline starts after the reconnect.
+  TricklingNetClient nc(1000, std::chrono::milliseconds(15));
+  nc.connect_delay = std::chrono::milliseconds(900);
+  nc.response_bytes = build_response_with_payload({0x42});
+  kmipclient::IOUtils io(nc);
+  kmipcore::secure_bytes response;
+
+  io.do_exchange(std::vector<uint8_t>{0, 1, 2, 3}, response, 1024);
+  EXPECT_EQ(response.size(), 9u);
+  EXPECT_FALSE(nc.io_deadline().has_value());
+}
+
+TEST(IOUtilsTest, EarlierCallerDeadlineIsKeptAndRestored) {
+  TricklingNetClient nc(5000, std::chrono::milliseconds(5));
+  nc.response_bytes = build_response_with_payload(std::vector<uint8_t>(392));
+  const auto caller_deadline =
+      kmipclient::NetClient::Clock::now() + std::chrono::milliseconds(100);
+  nc.set_io_deadline(caller_deadline);
+  kmipclient::IOUtils io(nc);
+  kmipcore::secure_bytes response;
+
+  EXPECT_THROW(
+      io.do_exchange(std::vector<uint8_t>{0, 1, 2, 3}, response, 1 << 20),
+      kmipclient::KmipIOException
+  );
+  EXPECT_EQ(nc.deadlines_seen.front(), caller_deadline);
+  EXPECT_EQ(nc.io_deadline(), caller_deadline);
 }
 
 TEST(IOUtilsTest, DebugLoggingRedactsSensitiveTtlvFields) {

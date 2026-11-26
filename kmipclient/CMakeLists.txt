@@ -124,6 +124,7 @@ if(BUILD_TESTS)
   add_executable(
     kmipclient_test
     tests/IOUtilsTest.cpp
+    tests/NetClientDeadlineTest.cpp
     tests/LocatePagingTest.cpp
     tests/TlsTestServerTest.cpp
     tests/GetKeyFormatTest.cpp
