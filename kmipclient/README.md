@@ -26,7 +26,8 @@ The only external dependency is **OpenSSL** (already required by `kmipcore`).
 `KmipClient` itself depends only on `kmipcore`.  The network layer is injected
 as an implementation of the `NetClient` interface.  The library ships a
 ready-to-use `NetClientOpenSSL` implementation; any custom transport can be
-used by implementing the four-method `NetClient` interface.
+used by implementing the four pure virtual methods of the `NetClient`
+interface.
 
 ---
 
@@ -50,18 +51,30 @@ used by implementing the four-method `NetClient` interface.
 
 ### `NetClient` interface
 
-Abstract base class for network transport.  Defines four virtual methods and
-optional TLS verification controls:
+Abstract base class for network transport.  Defines four pure virtual
+methods, and virtual methods with default implementations for the connection
+state, the exchange deadline and TLS verification controls:
 
 ```cpp
-virtual bool connect();
-virtual void close();
-virtual int  send(std::span<const std::uint8_t> data);
-virtual int  recv(std::span<std::uint8_t> data);
+virtual bool connect() = 0;
+virtual void close() = 0;
+virtual int  send(std::span<const std::uint8_t> data) = 0;
+virtual int  recv(std::span<std::uint8_t> data) = 0;
 
+virtual bool is_connected() const noexcept;
+virtual void set_io_deadline(std::optional<Clock::time_point> deadline) noexcept;
 virtual void set_tls_verification(TlsVerificationOptions options) noexcept;
 virtual TlsVerificationOptions tls_verification() const noexcept;
 ```
+
+A custom transport's `connect()` and `close()` must keep the protected
+`m_isConnected` flag up to date: `is_connected()` returns it by default, the
+client calls `connect()` before an exchange when it is false, and the pool
+discards a connection for which it is false. `send()` and `recv()` should not block past
+`io_deadline()`. A transport that wraps another `NetClient` should override
+`is_connected()` to return the wrapped client's state, and
+`set_io_deadline()` to call `NetClient::set_io_deadline()` and forward the
+deadline.
 
 `NetClientOpenSSL` is the ready-to-use implementation based on OpenSSL BIO.
 
@@ -155,7 +168,9 @@ request/response exchange as a whole: an operation fails with
 `KmipIOException` ("timed out") when the server has not delivered the whole
 response by then, however it spreads the bytes over time. Operations that
 make several exchanges (for example paged `op_all`) get `timeout_ms` for each.
-A value of 0 or less means no timeout.
+So `timeout_ms` must cover the largest response you expect over the slowest
+link: the `NetClientOpenSSL` default of 500 ms suits key-sized responses on a
+LAN. A value of 0 or less means no timeout.
 
 Copy and move are disabled on `KmipClient` itself, but shared-handle usage is
 supported via `KmipClient::create_shared(...)` for pointer-centric integrations

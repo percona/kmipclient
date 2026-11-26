@@ -47,11 +47,15 @@ namespace {
       : NetClient("host", "5696", "client.pem", "client.key", "ca.pem", 1000) {}
 
     bool connect() override {
-      m_isConnected = true;
-      return true;
+      ++connect_calls;
+      m_isConnected = connect_result;
+      return connect_result;
     }
 
-    void close() override { m_isConnected = false; }
+    void close() override {
+      ++close_calls;
+      m_isConnected = false;
+    }
 
     int send(std::span<const std::uint8_t> data) override {
       ++send_calls;
@@ -84,14 +88,18 @@ namespace {
     std::vector<uint8_t> response_bytes;
     std::vector<uint8_t> sent_bytes;
     int send_calls = 0;
+    bool connect_result = true;
+    int connect_calls = 0;
+    int close_calls = 0;
 
   private:
     int send_plan_index = 0;
     size_t recv_offset = 0;
   };
 
-  // Returns one byte per recv() after a pause, and records the deadline it
-  // sees on every call.
+  // Returns one byte per recv() after a pause (with whole_reads, all the
+  // bytes asked for), takes one byte per send() after a pause when
+  // trickle_send is set, and records the deadline it sees on every call.
   class TricklingNetClient final : public kmipclient::NetClient {
   public:
     TricklingNetClient(int timeout_ms, std::chrono::milliseconds per_byte)
@@ -110,6 +118,10 @@ namespace {
         connect();  // as NetClientOpenSSL does
       }
       deadlines_seen.push_back(io_deadline());
+      if (trickle_send && !data.empty()) {
+        std::this_thread::sleep_for(per_byte_);
+        return 1;
+      }
       return static_cast<int>(data.size());
     }
 
@@ -119,18 +131,80 @@ namespace {
         return 0;
       }
       std::this_thread::sleep_for(per_byte_);
-      data[0] = response_bytes[offset_++];
-      return 1;
+      const size_t count =
+          whole_reads ? std::min(data.size(), response_bytes.size() - offset_)
+                      : 1;
+      std::copy_n(response_bytes.data() + offset_, count, data.data());
+      offset_ += count;
+      return static_cast<int>(count);
     }
 
     std::vector<uint8_t> response_bytes;
     std::vector<std::optional<Clock::time_point>> deadlines_seen;
     std::chrono::milliseconds connect_delay{0};
+    bool trickle_send = false;
+    bool whole_reads = false;
 
   private:
     std::chrono::milliseconds per_byte_;
     size_t offset_ = 0;
   };
+
+  // Forwards every call to a wrapped NetClient and keeps no state of its own.
+  class ForwardingNetClient final : public kmipclient::NetClient {
+  public:
+    explicit ForwardingNetClient(kmipclient::NetClient &inner)
+      : NetClient(
+            "host", "5696", "c.pem", "c.key", "ca.pem", inner.timeout_ms()
+        ),
+        inner_(inner) {}
+
+    bool connect() override { return inner_.connect(); }
+    void close() override { inner_.close(); }
+    [[nodiscard]] bool is_connected() const noexcept override {
+      return inner_.is_connected();
+    }
+    void set_io_deadline(
+        std::optional<Clock::time_point> deadline
+    ) noexcept override {
+      NetClient::set_io_deadline(deadline);
+      inner_.set_io_deadline(deadline);
+    }
+    int send(std::span<const std::uint8_t> data) override {
+      return inner_.send(data);
+    }
+    int recv(std::span<std::uint8_t> data) override {
+      return inner_.recv(data);
+    }
+
+  private:
+    kmipclient::NetClient &inner_;
+  };
+
+  // Runs do_exchange() and returns the message of the KmipIOException it
+  // throws, or "" when it succeeds.
+  std::string exchange_error(
+      kmipclient::IOUtils &io,
+      std::span<const uint8_t> request,
+      size_t max_message_size = 1024
+  ) {
+    kmipcore::secure_bytes response;
+    try {
+      io.do_exchange(request, response, max_message_size);
+    } catch (const kmipclient::KmipIOException &e) {
+      return e.what();
+    }
+    return "";
+  }
+
+  testing::AssertionResult
+      contains(const std::string &text, const std::string &part) {
+    if (text.find(part) != std::string::npos) {
+      return testing::AssertionSuccess();
+    }
+    return testing::AssertionFailure()
+        << "\"" << text << "\" does not contain \"" << part << "\"";
+  }
 
   std::vector<uint8_t>
       build_response_with_payload(const std::vector<uint8_t> &payload) {
@@ -281,6 +355,7 @@ TEST(IOUtilsTest, TimeoutBoundsTheWholeExchange) {
   EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
 
   // One deadline, the same on every call, cleared afterwards.
+  ASSERT_FALSE(nc.deadlines_seen.empty());
   ASSERT_TRUE(nc.deadlines_seen.front().has_value());
   for (const auto &deadline : nc.deadlines_seen) {
     EXPECT_EQ(deadline, nc.deadlines_seen.front());
@@ -315,8 +390,85 @@ TEST(IOUtilsTest, EarlierCallerDeadlineIsKeptAndRestored) {
       io.do_exchange(std::vector<uint8_t>{0, 1, 2, 3}, response, 1 << 20),
       kmipclient::KmipIOException
   );
+  ASSERT_FALSE(nc.deadlines_seen.empty());
   EXPECT_EQ(nc.deadlines_seen.front(), caller_deadline);
   EXPECT_EQ(nc.io_deadline(), caller_deadline);
+}
+
+TEST(IOUtilsTest, TimeoutBoundsTheWholeSend) {
+  // 400 bytes at 5 ms each take 2 s; every single send() is far below the
+  // 200 ms timeout.
+  TricklingNetClient nc(200, std::chrono::milliseconds(5));
+  nc.trickle_send = true;
+  nc.response_bytes = build_response_with_payload({0x42});
+  kmipclient::IOUtils io(nc);
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_TRUE(contains(
+      exchange_error(io, std::vector<uint8_t>(400, 0x42)),
+      "KMIP send timed out: exchange deadline passed"
+  ));
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+}
+
+TEST(IOUtilsTest, LastBytesAfterTheDeadlineAreRejected) {
+  // Each recv() returns all it is asked for after 60 ms: the header at about
+  // 60 ms, the body at about 120 ms, past the 100 ms deadline.
+  TricklingNetClient nc(100, std::chrono::milliseconds(60));
+  nc.whole_reads = true;
+  nc.response_bytes = build_response_with_payload({0x42});
+  kmipclient::IOUtils io(nc);
+
+  EXPECT_TRUE(contains(
+      exchange_error(io, std::vector<uint8_t>{0, 1, 2, 3}),
+      "KMIP receive timed out: exchange deadline passed"
+  ));
+  EXPECT_FALSE(nc.is_connected());
+}
+
+TEST(IOUtilsTest, EmptyRequestIsRejectedBeforeReconnecting) {
+  FakeNetClient nc;  // not connected
+  nc.connect_result = false;
+  kmipclient::IOUtils io(nc);
+
+  EXPECT_TRUE(contains(
+      exchange_error(io, std::vector<uint8_t>{}),
+      "Can not send empty KMIP request."
+  ));
+  EXPECT_EQ(nc.connect_calls, 0);
+}
+
+TEST(IOUtilsTest, FailedReconnectEndsTheExchange) {
+  FakeNetClient nc;  // not connected
+  nc.connect_result = false;
+  kmipclient::IOUtils io(nc);
+
+  EXPECT_TRUE(contains(
+      exchange_error(io, std::vector<uint8_t>{0, 1, 2, 3}),
+      "Can not connect to the KMIP server."
+  ));
+  EXPECT_EQ(nc.connect_calls, 1);
+  EXPECT_EQ(nc.send_calls, 0);
+  EXPECT_EQ(nc.close_calls, 1);
+  EXPECT_FALSE(nc.is_connected());
+}
+
+TEST(IOUtilsTest, WrapperThatForwardsIsConnectedIsNotReconnected) {
+  FakeNetClient inner;
+  const auto one = build_response_with_payload({0x42});
+  for (int i = 0; i < 3; ++i) {
+    inner.response_bytes.insert(
+        inner.response_bytes.end(), one.begin(), one.end()
+    );
+  }
+  ForwardingNetClient nc(inner);
+  ASSERT_TRUE(nc.connect());
+  kmipclient::IOUtils io(nc);
+
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(exchange_error(io, std::vector<uint8_t>{0, 1, 2, 3}), "");
+  }
+  EXPECT_EQ(inner.connect_calls, 1);
 }
 
 TEST(IOUtilsTest, DebugLoggingRedactsSensitiveTtlvFields) {
