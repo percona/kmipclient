@@ -189,9 +189,11 @@ Kmip kmip(host, port, client_cert, client_key, server_ca, timeout_ms);
 auto key_id = kmip.client().op_create_aes_key("mykey", "mygroup");
 ```
 
-The façade also accepts an optional final
+Like `NetClientOpenSSL` and `KmipClientPool`, the façade verifies the server
+certificate chain and host name by default. It also accepts an optional
 `NetClient::TlsVerificationOptions` parameter for environments that need to
-relax TLS checks without constructing `NetClientOpenSSL` directly.
+relax TLS checks without constructing `NetClientOpenSSL` directly (see
+[TLS verification controls](#tls-verification-controls)).
 
 #### Ownership patterns
 
@@ -848,6 +850,12 @@ All examples follow the same argument pattern:
 ```
 <example_binary> <host> <port> <client_cert> <client_key> <server_ca_cert> [extra args…]
 ```
+
+The examples verify the server certificate chain against `<server_ca_cert>`
+and the certificate's host name or IP address against `<host>`, so `<host>`
+must be a name or address the server certificate is issued for. To try a lab
+server whose certificate does not match, use `example_get_tls_verify`, which
+can relax the checks.
 
 `example_get_tls_verify` adds two required trailing arguments beyond the common
 connection parameters:

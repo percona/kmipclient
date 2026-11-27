@@ -43,7 +43,10 @@ namespace kmipclient {
      * @param version KMIP protocol version to use for requests.
      * @param logger Optional KMIP protocol logger.
      * @param tls_verification TLS peer/hostname verification settings applied
-     *        before the OpenSSL transport connects.
+     *        before the OpenSSL transport connects. Defaults to {true, true}
+     *        (server certificate chain and host name both verified), as for
+     *        NetClientOpenSSL and KmipClientPool; callers that need to relax
+     *        the checks must pass the options explicitly.
      * @param close_on_destroy When true (default), closes the transport on
      *        Kmip destruction. Set to false to keep transport alive after
      *        Kmip destruction.
@@ -58,7 +61,7 @@ namespace kmipclient {
         int timeout_ms,
         kmipcore::ProtocolVersion version = kmipcore::KMIP_VERSION_1_4,
         const std::shared_ptr<kmipcore::Logger> &logger = {},
-        NetClient::TlsVerificationOptions tls_verification = {false, false},
+        NetClient::TlsVerificationOptions tls_verification = {},
         bool close_on_destroy = true
     )
       : m_net_client(
@@ -146,7 +149,7 @@ namespace kmipclient {
         int timeout_ms,
         kmipcore::ProtocolVersion version = kmipcore::KMIP_VERSION_1_4,
         const std::shared_ptr<kmipcore::Logger> &logger = {},
-        NetClient::TlsVerificationOptions tls_verification = {false, false},
+        NetClient::TlsVerificationOptions tls_verification = {},
         bool close_on_destroy = true
     ) {
       return std::make_shared<Kmip>(

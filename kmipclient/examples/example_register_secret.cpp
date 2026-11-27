@@ -40,8 +40,8 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  Kmip kmip(argv[1], argv[2], argv[3], argv[4], argv[5], 200);
   try {
+    Kmip kmip(argv[1], argv[2], argv[3], argv[4], argv[5], 200);
     const std::string generated_secret_text = "example_secret_2026";
     auto secret = Secret::from_text(
         generated_secret_text, secret_data_type::KMIP_SECDATA_PASSWORD
