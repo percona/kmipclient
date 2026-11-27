@@ -6,8 +6,9 @@
  */
 
 // Test helpers: certificates written to a temporary directory, and an
-// in-process TLS server on 127.0.0.1 that hands each accepted, handshaken
-// connection to a callback. For POSIX and Windows.
+// in-process TLS server on the loopback address (127.0.0.1, or ::1) that
+// hands each accepted, handshaken connection to a callback. For POSIX and
+// Windows.
 
 #ifndef KMIPCLIENT_TESTS_TLS_TEST_SERVER_HPP
 #define KMIPCLIENT_TESTS_TLS_TEST_SERVER_HPP
@@ -315,8 +316,15 @@ namespace kmipclient::test {
   };
 #endif
 
+  /** The loopback address a TlsTestServer listens on. */
+  enum class Loopback {
+    IPv4,  // 127.0.0.1
+    IPv6,  // ::1
+  };
+
   /**
-   * TLS server on 127.0.0.1 and a free port.
+   * TLS server on the loopback address (127.0.0.1 by default, or ::1) and a
+   * free port.
    *
    * Connections are served one at a time on a server thread: each is
    * handshaken with @p cert and passed to @p on_connection (which may be
@@ -335,6 +343,8 @@ namespace kmipclient::test {
    *   SSL_read() returns at once, and later connects are refused. A handler
    *   must return once SSL_read() or SSL_write() fails.
    * - read_timeout bounds each read of a stalled client; 0 means no limit.
+   * - With Loopback::IPv6 the server accepts IPv6 connections only; the
+   *   constructor throws if the host has no IPv6 loopback.
    * - On POSIX, SIGPIPE is ignored in the process while a server exists
    *   (see IgnoreSigpipe), so neither the server nor a client of it ends
    *   the test by writing to a peer that went away. Declare the client
@@ -347,7 +357,8 @@ namespace kmipclient::test {
     explicit TlsTestServer(
         const TestCert &cert,
         Handler on_connection = {},
-        std::chrono::milliseconds read_timeout = std::chrono::seconds(5)
+        std::chrono::milliseconds read_timeout = std::chrono::seconds(5),
+        Loopback loopback = Loopback::IPv4
     )
       : on_connection_(std::move(on_connection)), read_timeout_(read_timeout) {
       ctx_.reset(SSL_CTX_new(TLS_server_method()));
@@ -365,15 +376,23 @@ namespace kmipclient::test {
       // Non-blocking, so that accept() cannot block when the connection
       // that poll() reported is gone by the time it runs.
       init_sockets();
-      listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-      sockaddr_in addr{};
-      addr.sin_family = AF_INET;
-      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      socklen_t addr_len = sizeof(addr);
+      sockaddr_storage addr{};
+      socklen_t addr_len = 0;
+      if (loopback == Loopback::IPv6) {
+        auto &a6 = reinterpret_cast<sockaddr_in6 &>(addr);
+        a6.sin6_family = AF_INET6;
+        a6.sin6_addr.s6_addr[15] = 1;  // ::1
+        addr_len = sizeof(a6);
+      } else {
+        auto &a4 = reinterpret_cast<sockaddr_in &>(addr);
+        a4.sin_family = AF_INET;
+        a4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr_len = sizeof(a4);
+      }
+      listen_fd_ = ::socket(addr.ss_family, SOCK_STREAM, 0);
       if (listen_fd_ == no_socket || !set_blocking(listen_fd_, false) ||
-          ::bind(
-              listen_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)
-          ) != 0 ||
+          ::bind(listen_fd_, reinterpret_cast<sockaddr *>(&addr), addr_len) !=
+              0 ||
           ::listen(listen_fd_, 8) != 0 ||
           ::getsockname(
               listen_fd_, reinterpret_cast<sockaddr *>(&addr), &addr_len
@@ -381,7 +400,11 @@ namespace kmipclient::test {
         close_listener();
         throw std::runtime_error("server socket setup failed");
       }
-      port_ = ntohs(addr.sin_port);
+      port_ = ntohs(
+          loopback == Loopback::IPv6
+              ? reinterpret_cast<const sockaddr_in6 &>(addr).sin6_port
+              : reinterpret_cast<const sockaddr_in &>(addr).sin_port
+      );
       try {
         thread_ = std::thread([this] { serve(); });
       } catch (...) {
