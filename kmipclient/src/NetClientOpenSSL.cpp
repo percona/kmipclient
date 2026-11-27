@@ -231,6 +231,24 @@ namespace kmipclient {
     }
   }
 
+  // The message for a failed BIO_do_connect(). When the handshake failed
+  // because the server certificate was refused, the error queue says only
+  // "certificate verify failed"; the verify result says why, for example an
+  // untrusted chain or a host name that does not match.
+  static std::string connect_error(SSL *ssl) {
+    std::string message = "BIO_do_connect failed: " + getOpenSslError();
+    const long verify_result = SSL_get_verify_result(ssl);
+    if ((SSL_get_verify_mode(ssl) & SSL_VERIFY_PEER) != 0 &&
+        verify_result != X509_V_OK) {
+      if (!message.ends_with("; ")) {
+        message += "; ";
+      }
+      message += "verification error: ";
+      message += X509_verify_cert_error_string(verify_result);
+    }
+    return message;
+  }
+
   // Waits until the SSL BIO can make forward progress, bounded by deadline.
   static void wait_for_bio_retry(
       BIO *bio,
@@ -519,10 +537,7 @@ namespace kmipclient {
         }
 
         if (!BIO_should_retry(new_bio.get())) {
-          throw KmipIOException(
-              kmipcore::KMIP_IO_FAILURE,
-              "BIO_do_connect failed: " + getOpenSslError()
-          );
+          throw KmipIOException(kmipcore::KMIP_IO_FAILURE, connect_error(ssl));
         }
 
         wait_for_bio_retry(
@@ -538,10 +553,7 @@ namespace kmipclient {
       }
     } else {
       if (BIO_do_connect(new_bio.get()) != 1) {
-        throw KmipIOException(
-            kmipcore::KMIP_IO_FAILURE,
-            "BIO_do_connect failed: " + getOpenSslError()
-        );
+        throw KmipIOException(kmipcore::KMIP_IO_FAILURE, connect_error(ssl));
       }
     }
 
