@@ -201,9 +201,8 @@ namespace kmipcore {
 
         auto password = credentialValue->getChild(tag::KMIP_TAG_PASSWORD);
         if (password) {
-          auto pw = password->toString();
+          const auto pw = password->stringView();
           rh.password_.emplace(pw.begin(), pw.end());
-          secure_clear(pw.data(), pw.size());
         }
       }
     }

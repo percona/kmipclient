@@ -289,14 +289,17 @@ namespace kmipcore {
           break;
         }
         case Type::KMIP_TYPE_TEXT_STRING: {
-          std::string s(reinterpret_cast<const char *>(&data[offset]), length);
-          elem->value = TextString{s};
+          // Copied straight into zeroed-on-free storage and moved into the
+          // variant, without a plain std::string in between.
+          const auto value_view = data.subspan(offset, length);
+          elem->value =
+              TextString{secure_string(value_view.begin(), value_view.end())};
           break;
         }
         case Type::KMIP_TYPE_BYTE_STRING: {
           const auto value_view = data.subspan(offset, length);
-          std::vector<std::uint8_t> v(value_view.begin(), value_view.end());
-          elem->value = ByteString{v};
+          elem->value =
+              ByteString{secure_bytes(value_view.begin(), value_view.end())};
           break;
         }
         case Type::KMIP_TYPE_DATE_TIME: {
@@ -319,8 +322,8 @@ namespace kmipcore {
         }
         case Type::KMIP_TYPE_BIG_INTEGER: {
           const auto value_view = data.subspan(offset, length);
-          std::vector<std::uint8_t> v(value_view.begin(), value_view.end());
-          elem->value = BigInteger{v};
+          elem->value =
+              BigInteger{secure_bytes(value_view.begin(), value_view.end())};
           break;
         }
         case Type::KMIP_TYPE_DATE_TIME_EXTENDED: {
@@ -381,14 +384,22 @@ namespace kmipcore {
   std::shared_ptr<Element>
       Element::createTextString(Tag t, std::string_view v) {
     return std::make_shared<Element>(
-        t, static_cast<Type>(KMIP_TYPE_TEXT_STRING), TextString{std::string{v}}
+        t,
+        static_cast<Type>(KMIP_TYPE_TEXT_STRING),
+        TextString{secure_string(v.begin(), v.end())}
     );
   }
   std::shared_ptr<Element>
-      Element::createByteString(Tag t, const std::vector<std::uint8_t> &v) {
+      Element::createByteString(Tag t, std::span<const std::uint8_t> v) {
     return std::make_shared<Element>(
-        t, static_cast<Type>(KMIP_TYPE_BYTE_STRING), ByteString{v}
+        t,
+        static_cast<Type>(KMIP_TYPE_BYTE_STRING),
+        ByteString{secure_bytes(v.begin(), v.end())}
     );
+  }
+  std::shared_ptr<Element>
+      Element::createByteString(Tag t, std::initializer_list<std::uint8_t> v) {
+    return createByteString(t, std::span<const std::uint8_t>(v));
   }
   std::shared_ptr<Element> Element::createDateTime(Tag t, std::int64_t v) {
     return std::make_shared<Element>(
@@ -407,10 +418,16 @@ namespace kmipcore {
     );
   }
   std::shared_ptr<Element>
-      Element::createBigInteger(Tag t, const std::vector<std::uint8_t> &v) {
+      Element::createBigInteger(Tag t, std::span<const std::uint8_t> v) {
     return std::make_shared<Element>(
-        t, static_cast<Type>(KMIP_TYPE_BIG_INTEGER), BigInteger{v}
+        t,
+        static_cast<Type>(KMIP_TYPE_BIG_INTEGER),
+        BigInteger{secure_bytes(v.begin(), v.end())}
     );
+  }
+  std::shared_ptr<Element>
+      Element::createBigInteger(Tag t, std::initializer_list<std::uint8_t> v) {
+    return createBigInteger(t, std::span<const std::uint8_t>(v));
   }
 
   // Helper accessors
@@ -486,13 +503,22 @@ namespace kmipcore {
   }
 
   std::string Element::toString() const {
+    return std::string(stringView());
+  }
+
+  std::vector<uint8_t> Element::toBytes() const {
+    const auto bytes = bytesView();
+    return {bytes.begin(), bytes.end()};
+  }
+
+  std::string_view Element::stringView() const {
     if (auto *v = std::get_if<TextString>(&value)) {
-      return v->value;
+      return {v->value.data(), v->value.size()};
     }
     throw KmipException("Element is not TextString");
   }
 
-  std::vector<uint8_t> Element::toBytes() const {
+  std::span<const uint8_t> Element::bytesView() const {
     if (auto *v = std::get_if<ByteString>(&value)) {
       return v->value;
     }

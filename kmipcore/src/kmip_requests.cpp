@@ -159,10 +159,7 @@ namespace kmipcore {
         make_key_value(std::span<const unsigned char> bytes) {
       auto key_value = Element::createStructure(tag::KMIP_TAG_KEY_VALUE);
       key_value->asStructure()->add(
-          Element::createByteString(
-              tag::KMIP_TAG_KEY_MATERIAL,
-              std::vector<uint8_t>(bytes.begin(), bytes.end())
-          )
+          Element::createByteString(tag::KMIP_TAG_KEY_MATERIAL, bytes)
       );
       return key_value;
     }

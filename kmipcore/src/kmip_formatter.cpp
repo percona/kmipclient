@@ -50,7 +50,7 @@ namespace kmipcore {
       return oss.str();
     }
 
-    [[nodiscard]] std::string quote_string(const std::string &value) {
+    [[nodiscard]] std::string quote_string(std::string_view value) {
       std::ostringstream oss;
       oss << '"';
       for (const char ch : value) {
@@ -152,9 +152,9 @@ namespace kmipcore {
       switch (static_cast<std::uint32_t>(element.type)) {
         case KMIP_TYPE_BIG_INTEGER:
         case KMIP_TYPE_BYTE_STRING:
-          return element.toBytes().size();
+          return element.bytesView().size();
         case KMIP_TYPE_TEXT_STRING:
-          return element.toString().size();
+          return element.stringView().size();
         default:
           return std::nullopt;
       }
@@ -524,11 +524,8 @@ namespace kmipcore {
           oss << element->toLong();
           break;
         case KMIP_TYPE_BIG_INTEGER: {
-          const auto value = element->toBytes();
-          oss << "len=" << value.size() << ", hex=["
-              << format_bytes_hex(
-                     std::span<const uint8_t>(value.data(), value.size())
-                 )
+          const auto value = element->bytesView();
+          oss << "len=" << value.size() << ", hex=[" << format_bytes_hex(value)
               << ']';
           break;
         }
@@ -539,14 +536,11 @@ namespace kmipcore {
           oss << (element->toBool() ? "true" : "false");
           break;
         case KMIP_TYPE_TEXT_STRING:
-          oss << quote_string(element->toString());
+          oss << quote_string(element->stringView());
           break;
         case KMIP_TYPE_BYTE_STRING: {
-          const auto value = element->toBytes();
-          oss << "len=" << value.size() << ", hex=["
-              << format_bytes_hex(
-                     std::span<const uint8_t>(value.data(), value.size())
-                 )
+          const auto value = element->bytesView();
+          oss << "len=" << value.size() << ", hex=[" << format_bytes_hex(value)
               << ']';
           break;
         }

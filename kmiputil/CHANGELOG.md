@@ -1,3 +1,10 @@
+Unreleased
+
+    KeyWriter::to_hex, to_base64 and to_PEM return kmipcore::secure_string,
+    which is now a class derived from std::basic_string instead of an
+    alias; see the kmipclient CHANGELOG (Unreleased) for the source changes
+    this can need.
+
 Oct, 2026 Version 0.1.0
 
     Initial release. Key reading, writing and generation moved out of

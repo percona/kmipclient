@@ -12,6 +12,7 @@
 
 #include <ctime>
 #include <iomanip>
+#include <span>
 #include <sstream>
 #include <string_view>
 
@@ -32,7 +33,7 @@ namespace kmipcore {
       return oss.str();
     }
 
-    [[nodiscard]] std::string bytes_to_hex(const std::vector<uint8_t> &bytes) {
+    [[nodiscard]] std::string bytes_to_hex(std::span<const uint8_t> bytes) {
       std::ostringstream oss;
       oss << std::uppercase << std::hex << std::setfill('0');
       for (size_t i = 0; i < bytes.size(); ++i) {
@@ -91,7 +92,7 @@ namespace kmipcore {
           break;
         case type::KMIP_TYPE_BYTE_STRING:
         case type::KMIP_TYPE_BIG_INTEGER:
-          result.set(name, bytes_to_hex(value->toBytes()));
+          result.set(name, bytes_to_hex(value->bytesView()));
           break;
         case type::KMIP_TYPE_INTERVAL:
           result.set(name, static_cast<int64_t>(value->toInterval()));
@@ -203,7 +204,8 @@ namespace kmipcore {
             case type::KMIP_TYPE_BYTE_STRING:
             case type::KMIP_TYPE_BIG_INTEGER:
               result.set(
-                  generic_name_for_tag(elem->tag), bytes_to_hex(elem->toBytes())
+                  generic_name_for_tag(elem->tag),
+                  bytes_to_hex(elem->bytesView())
               );
               break;
             case type::KMIP_TYPE_INTERVAL:

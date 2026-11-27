@@ -11,20 +11,23 @@
 #include "kmipcore/kmip_basics.hpp"
 #include "kmipcore/kmip_errors.hpp"
 
+#include <span>
+
 namespace kmipcore {
 
   namespace {
 
-    /** Copies Key Material straight into zeroed-on-free memory. toBytes()
-     * would return another, plain copy of the key that is never zeroed. */
-    secure_bytes secure_key_material(const Element &key_material) {
+    /** The Key Material bytes, without a copy: the Key or Secret built from
+     * them makes the only copy, in zeroed-on-free memory. toBytes() would
+     * return a plain copy of the key that is never zeroed. */
+    std::span<const uint8_t> key_material_bytes(const Element &key_material) {
       const auto *bytes = std::get_if<ByteString>(&key_material.value);
       if (!bytes) {
         throw KmipException(
             KMIP_INVALID_ENCODING, "Key Material is not a byte string."
         );
       }
-      return secure_bytes(bytes->value.begin(), bytes->value.end());
+      return bytes->value;
     }
 
     /** Extract a Key from an element that contains a KeyBlock (Symmetric Key,
@@ -79,7 +82,7 @@ namespace kmipcore {
         );
       }
 
-      secure_bytes kv = secure_key_material(*key_material);
+      const auto kv = key_material_bytes(*key_material);
 
       // Parse attributes from the key value's Attribute children.
       Attributes key_attrs = AttributesParser::parse(
@@ -166,7 +169,7 @@ namespace kmipcore {
     }
 
     Secret secret;
-    secret.set_value(secure_key_material(*key_material));
+    secret.set_value(key_material_bytes(*key_material));
     secret.set_secret_type(checked_secret_data_type(secret_type->toEnum()));
     return secret;
   }
