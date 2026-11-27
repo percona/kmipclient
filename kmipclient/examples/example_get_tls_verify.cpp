@@ -86,12 +86,14 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  NetClientOpenSSL net_client(argv[1], argv[2], argv[3], argv[4], argv[5], 200);
-  net_client.set_tls_verification(*tls_verification);
-  net_client.connect();
-  KmipClient client(net_client);
-
   try {
+    NetClientOpenSSL net_client(
+        argv[1], argv[2], argv[3], argv[4], argv[5], 200
+    );
+    net_client.set_tls_verification(*tls_verification);
+    net_client.connect();
+    KmipClient client(net_client);
+
     std::string id = argv[6];
     auto key = client.op_get_key(id);
     std::cout << "Key: 0x";

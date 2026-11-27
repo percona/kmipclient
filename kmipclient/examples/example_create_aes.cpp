@@ -39,8 +39,8 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  Kmip kmip(argv[1], argv[2], argv[3], argv[4], argv[5], 200);
   try {
+    Kmip kmip(argv[1], argv[2], argv[3], argv[4], argv[5], 200);
     auto key_id = kmip.client().op_create_aes_key(
         argv[6],
         "TestGroup",

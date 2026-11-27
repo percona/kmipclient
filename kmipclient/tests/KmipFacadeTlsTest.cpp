@@ -16,6 +16,7 @@
 
   #include "TlsTestServer.hpp"
 
+  #include <openssl/x509.h>
   #include <string>
 
 using kmipclient::Kmip;
@@ -31,15 +32,19 @@ namespace {
     TestCert server_cert{dir, "server", "IP:127.0.0.1"};
     TestCert other_ca{dir, "other-ca", "IP:127.0.0.1"};  // not the server's
     TlsTestServer server{server_cert};
+    // Trusted when passed as the CA, but issued for another host name.
+    TestCert dns_only{dir, "dns-only", "DNS:other.example"};
+    TlsTestServer dns_only_server{dns_only};
 
-    // Connects with the default TLS options, trusting only @p ca, through
-    // the constructor or create_shared(). Returns the error, or "".
-    std::string connect(const TestCert &ca, bool shared = false) {
+    // Connects to @p to with the default TLS options, trusting only @p ca,
+    // through the constructor or create_shared(). Returns the error, or "".
+    std::string
+        connect(const TlsTestServer &to, const TestCert &ca, bool shared) {
       try {
         if (shared) {
           (void) Kmip::create_shared(
               "127.0.0.1",
-              server.port().c_str(),
+              to.port().c_str(),
               server_cert.cert().c_str(),
               server_cert.key().c_str(),
               ca.cert().c_str(),
@@ -48,7 +53,7 @@ namespace {
         } else {
           Kmip kmip(
               "127.0.0.1",
-              server.port().c_str(),
+              to.port().c_str(),
               server_cert.cert().c_str(),
               server_cert.key().c_str(),
               ca.cert().c_str(),
@@ -62,26 +67,44 @@ namespace {
     }
   };
 
-  bool verify_failed(const std::string &error) {
-    return error.find("certificate verify failed") != std::string::npos;
+  // True when the handshake was refused for the verify result @p reason.
+  bool verify_failed(const std::string &error, long reason) {
+    return error.find("certificate verify failed") != std::string::npos &&
+           error.find(
+               std::string("verification error: ") +
+               X509_verify_cert_error_string(reason)
+           ) != std::string::npos;
+  }
+
+  const char *entry_point(bool shared) {
+    return shared ? "create_shared()" : "constructor";
   }
 
 }  // namespace
 
 TEST_F(KmipFacadeTlsTest, DefaultRefusesUntrustedCertificate) {
-  const std::string error = connect(other_ca);
-  EXPECT_TRUE(verify_failed(error)) << error;
+  for (const bool shared : {false, true}) {
+    SCOPED_TRACE(entry_point(shared));
+    const std::string error = connect(server, other_ca, shared);
+    EXPECT_TRUE(verify_failed(error, X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT))
+        << error;
+  }
 }
 
-TEST_F(KmipFacadeTlsTest, CreateSharedDefaultRefusesUntrustedCertificate) {
-  const std::string error = connect(other_ca, true);
-  EXPECT_TRUE(verify_failed(error)) << error;
+TEST_F(KmipFacadeTlsTest, DefaultRefusesCertificateForAnotherHost) {
+  for (const bool shared : {false, true}) {
+    SCOPED_TRACE(entry_point(shared));
+    const std::string error = connect(dns_only_server, dns_only, shared);
+    EXPECT_TRUE(verify_failed(error, X509_V_ERR_IP_ADDRESS_MISMATCH)) << error;
+  }
 }
 
 // Control: the same setup connects when the server can be verified.
 TEST_F(KmipFacadeTlsTest, DefaultConnectsToVerifiedServer) {
-  EXPECT_EQ(connect(server_cert), "");
-  EXPECT_EQ(connect(server_cert, true), "");
+  for (const bool shared : {false, true}) {
+    SCOPED_TRACE(entry_point(shared));
+    EXPECT_EQ(connect(server, server_cert, shared), "");
+  }
 }
 
 #else

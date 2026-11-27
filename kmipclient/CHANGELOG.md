@@ -3,14 +3,21 @@ Unreleased
     The Kmip facade (constructor and Kmip::create_shared()) verifies the
     server certificate chain and host name by default, like NetClientOpenSSL
     and KmipClientPool: the default of its tls_verification parameter is
-    {true, true} instead of {false, false}. A server whose certificate does
-    not chain to server_ca, or does not match the host, is now refused
-    ("certificate verify failed") unless the caller passes {true, false} or
-    {false, false}. The usual case is connecting by IP address to a server
-    whose certificate has only DNS names: connect by one of those names, or
-    pass {true, false}. The examples that use the facade (example_create_aes,
+    {true, true} instead of {false, false}. Both checks now refuse a server
+    ("certificate verify failed"):
+    - a certificate that does not chain to server_ca is refused unless the
+      caller passes {false, false} (development only);
+    - a trusted certificate that does not match the host is refused unless
+      the caller connects by a name the certificate holds, or passes
+      {true, false}. The usual case is connecting by IP address to a server
+      whose certificate has only DNS names.
+    The error now also gives OpenSSL's reason, for example "verification
+    error: IP address mismatch", so the two cases can be told apart. The
+    examples that use the facade (example_create_aes,
     example_register_secret, example_query_server_info,
     example_supported_versions) now verify the server too.
+    example_create_aes, example_register_secret and example_get_tls_verify
+    report a failed connection instead of aborting.
 
 Oct, 2026 Version 0.4.0
 
