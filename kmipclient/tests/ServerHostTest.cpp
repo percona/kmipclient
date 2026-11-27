@@ -136,7 +136,9 @@ TEST(ServerHostTest, IpAddressHostsConnect) {
         h.host, server.port(), cert.cert(), cert.key(), cert.cert(), 2000
     );
     EXPECT_TRUE(client.connect());
-    client.close();
+    // With TLS 1.3 the client is done first: wait for the server's side
+    // before closing.
     EXPECT_TRUE(server.wait_for_handshakes(1));
+    client.close();
   }
 }
