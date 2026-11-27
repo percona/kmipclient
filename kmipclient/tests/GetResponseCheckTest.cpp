@@ -29,6 +29,7 @@ namespace {
 
   using kmipclient::KmipClient;
   using kmipcore::Element;
+  using kmipcore::KeyType;
   using kmipcore::tag;
 
   constexpr const char *kRequestedId = "key-A";
@@ -40,10 +41,17 @@ namespace {
     int32_t key_format = kmipcore::KMIP_KEYFORMAT_RAW;
     std::optional<int32_t> algorithm = kmipcore::KMIP_CRYPTOALG_AES;
     std::optional<int32_t> length = 256;  // in the Key Block
+    std::optional<int32_t> attributes_algorithm;
     std::optional<int32_t> attributes_length;
+    // Algorithm and length go into the Key Value's KMIP 2.0 Attributes
+    // structure instead of the Key Block.
+    bool lengths_in_key_value = false;
     std::vector<uint8_t> material = std::vector<uint8_t>(32, 0x5A);
     std::string get_id = kRequestedId;
-    std::optional<std::string> later_get_id;  // Gets after the first
+    // Gets after the first.
+    std::optional<std::string> later_get_id;
+    std::optional<int32_t> later_object_type;
+    std::optional<int32_t> later_key_format;
     std::optional<std::string> attributes_id = std::string(kRequestedId);
   };
 
@@ -133,41 +141,55 @@ namespace {
 
   private:
     ElementPtr get_payload() {
+      const bool first = gets_++ == 0;
+      const int32_t object_type =
+          first ? b_.object_type
+                : b_.later_object_type.value_or(b_.object_type);
+      const int32_t key_format =
+          first ? b_.key_format : b_.later_key_format.value_or(b_.key_format);
+
       auto value = E::createStructure(tag::KMIP_TAG_KEY_VALUE);
       add(value, E::createByteString(tag::KMIP_TAG_KEY_MATERIAL, b_.material));
       auto block = E::createStructure(tag::KMIP_TAG_KEY_BLOCK);
       add(block,
-          E::createEnumeration(tag::KMIP_TAG_KEY_FORMAT_TYPE, b_.key_format));
+          E::createEnumeration(tag::KMIP_TAG_KEY_FORMAT_TYPE, key_format));
       add(block, value);
+      const auto lengths = b_.lengths_in_key_value
+                             ? E::createStructure(tag::KMIP_TAG_ATTRIBUTES)
+                             : block;
+      if (b_.lengths_in_key_value) {
+        add(value, lengths);
+      }
       if (b_.algorithm) {
-        add(block,
+        add(lengths,
             E::createEnumeration(
                 tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM, *b_.algorithm
             ));
       }
       if (b_.length) {
-        add(block,
+        add(lengths,
             E::createInteger(tag::KMIP_TAG_CRYPTOGRAPHIC_LENGTH, *b_.length));
       }
 
       ElementPtr object;
-      if (b_.object_type == kmipcore::KMIP_OBJTYPE_SECRET_DATA) {
+      if (object_type == kmipcore::KMIP_OBJTYPE_SECRET_DATA) {
         object = E::createStructure(tag::KMIP_TAG_SECRET_DATA);
         add(object,
             E::createEnumeration(
                 tag::KMIP_TAG_SECRET_DATA_TYPE, kmipcore::KMIP_SECDATA_PASSWORD
             ));
-      } else if (b_.object_type == kmipcore::KMIP_OBJTYPE_PRIVATE_KEY) {
+      } else if (object_type == kmipcore::KMIP_OBJTYPE_PRIVATE_KEY) {
         object = E::createStructure(tag::KMIP_TAG_PRIVATE_KEY);
+      } else if (object_type == kmipcore::KMIP_OBJTYPE_PUBLIC_KEY) {
+        object = E::createStructure(tag::KMIP_TAG_PUBLIC_KEY);
       } else {
         object = E::createStructure(tag::KMIP_TAG_SYMMETRIC_KEY);
       }
       add(object, block);
 
-      const bool first = gets_++ == 0;
       auto payload = E::createStructure(tag::KMIP_TAG_RESPONSE_PAYLOAD);
       add(payload,
-          E::createEnumeration(tag::KMIP_TAG_OBJECT_TYPE, b_.object_type));
+          E::createEnumeration(tag::KMIP_TAG_OBJECT_TYPE, object_type));
       add(payload,
           unique_id(first || !b_.later_get_id ? b_.get_id : *b_.later_get_id));
       add(payload, object);
@@ -186,6 +208,15 @@ namespace {
                   tag::KMIP_TAG_ATTRIBUTE_VALUE, kmipcore::KMIP_STATE_ACTIVE
               )
           ));
+      if (b_.attributes_algorithm) {
+        add(payload,
+            attribute(
+                "Cryptographic Algorithm",
+                E::createEnumeration(
+                    tag::KMIP_TAG_ATTRIBUTE_VALUE, *b_.attributes_algorithm
+                )
+            ));
+      }
       if (b_.attributes_length) {
         add(payload,
             attribute(
@@ -210,6 +241,8 @@ namespace {
     std::string error;  // "" when the operation succeeded
     int code = 0;
     int exchanges = 0;
+    std::optional<KeyType> key_type;  // op_get_key's result
+    std::optional<int32_t> key_format;
   };
 
   Outcome
@@ -222,14 +255,14 @@ namespace {
     try {
       switch (op) {
         case Op::get_key:
-        case Op::get_key_all_attributes:
-          EXPECT_EQ(
-              client.op_get_key(kRequestedId, op == Op::get_key_all_attributes)
-                  ->value()
-                  .size(),
-              b.material.size()
-          );
+        case Op::get_key_all_attributes: {
+          const auto key =
+              client.op_get_key(kRequestedId, op == Op::get_key_all_attributes);
+          EXPECT_EQ(key->value().size(), b.material.size());
+          out.key_type = key->type();
+          out.key_format = key->key_format();
           break;
+        }
         case Op::get_secret:
           (void) client.op_get_secret(kRequestedId);
           break;
@@ -293,6 +326,31 @@ TEST(GetResponseCheckTest, PreferredFormatRefetchIsChecked) {
   EXPECT_EQ(out.exchanges, 2);
 }
 
+TEST(GetResponseCheckTest, PreferredFormatRefetchOfAnotherTypeIsSkipped) {
+  // A PKCS#1 public key makes op_get_key ask again for X.509, then PKCS#8.
+  // Both answers are a private key under the same identifier, in the
+  // requested format; op_get_key keeps the public key it got first.
+  Behavior b;
+  b.object_type = kmipcore::KMIP_OBJTYPE_PUBLIC_KEY;
+  b.key_format = kmipcore::KMIP_KEYFORMAT_PKCS1;
+  b.algorithm = kmipcore::KMIP_CRYPTOALG_RSA;
+  b.length = 2048;
+  b.later_object_type = kmipcore::KMIP_OBJTYPE_PRIVATE_KEY;
+  b.later_key_format = kmipcore::KMIP_KEYFORMAT_X509;
+  const auto out = run(Op::get_key, b);
+  EXPECT_EQ(out.error, "");
+  EXPECT_EQ(out.key_type, KeyType::PUBLIC_KEY);
+  EXPECT_EQ(out.key_format, kmipcore::KMIP_KEYFORMAT_PKCS1);
+  EXPECT_EQ(out.exchanges, 3);
+
+  // Control: the same answers for a public key are taken.
+  b.later_object_type.reset();
+  const auto control = run(Op::get_key, b);
+  EXPECT_EQ(control.error, "");
+  EXPECT_EQ(control.key_type, KeyType::PUBLIC_KEY);
+  EXPECT_EQ(control.key_format, kmipcore::KMIP_KEYFORMAT_X509);
+}
+
 TEST(GetResponseCheckTest, IdentifierForms) {
   struct Case {
     std::string get_id;
@@ -305,6 +363,10 @@ TEST(GetResponseCheckTest, IdentifierForms) {
       {kRequestedId, std::nullopt, ""},  // Get Attributes may omit it
       // A long identifier is shortened in the message.
       {std::string(1000, 'x'), kRequestedId, std::string(64, 'x') + "...'"},
+      // Bytes outside printable ASCII are shown as '?'.
+      {"key\nB\x01\x7f\xc3\xa9",
+       kRequestedId,
+       "'key?B" + std::string(4, '?') + "'"},
   };
   for (const auto &c : cases) {
     Behavior b;
@@ -316,6 +378,7 @@ TEST(GetResponseCheckTest, IdentifierForms) {
     } else {
       EXPECT_NE(error.find(c.expected), std::string::npos) << error;
       EXPECT_EQ(error.find(std::string(65, 'x')), std::string::npos);
+      EXPECT_EQ(error.find('\n'), std::string::npos);
     }
   }
 }
@@ -331,6 +394,7 @@ TEST(GetResponseCheckTest, SymmetricKeyMaterialMatchesItsLength) {
     std::optional<int32_t> attributes_length;
     std::size_t bytes;
     std::string expected;  // part of the error; "" when accepted
+    std::optional<int32_t> attributes_algorithm = std::nullopt;
   };
   const std::vector<Case> cases{
       {AES, 256, none, 32, ""},
@@ -344,6 +408,13 @@ TEST(GetResponseCheckTest, SymmetricKeyMaterialMatchesItsLength) {
       {TDES, 168, none, 24, ""},
       {TDES, 192, none, 24, ""},
       {TDES, 168, none, 20, "Cryptographic Length is 168"},
+      // The parity rule is for DES and 3DES only, and for lengths that
+      // count 7 bits per byte; a length that counts the parity bits must
+      // come with material that has them.
+      {AES, 168, none, 24, "Cryptographic Length is 168"},
+      {TDES, 170, none, 24, "Cryptographic Length is 170"},
+      {TDES, 192, none, 21, "Cryptographic Length is 192"},
+      {DES, 64, none, 7, "Cryptographic Length is 64"},
       {TDES, 192, 168, 24, ""},
       {TDES, INT32_MAX, none, 24, "Cryptographic Length is"},
       {TDES, -8, none, 24, "Cryptographic Length is"},
@@ -351,6 +422,10 @@ TEST(GetResponseCheckTest, SymmetricKeyMaterialMatchesItsLength) {
       {AES, none, 256, 32, ""},
       {AES, none, 256, 1, "Cryptographic Length is 256"},
       {AES, 128, 256, 16, "Cryptographic Length is 256"},
+      {AES, 256, 128, 16, "Cryptographic Length is 256"},
+      // The Key Block and the attributes must name the same algorithm.
+      {AES, 256, 224, 32, "Cryptographic Algorithm is", DES},
+      {AES, 256, none, 32, "", AES},
       {AES, none, none, 16, "has no Cryptographic Length"},
   };
   for (std::size_t i = 0; i < cases.size(); ++i) {
@@ -359,6 +434,7 @@ TEST(GetResponseCheckTest, SymmetricKeyMaterialMatchesItsLength) {
     b.algorithm = c.algorithm;
     b.length = c.block_length;
     b.attributes_length = c.attributes_length;
+    b.attributes_algorithm = c.attributes_algorithm;
     b.material.assign(c.bytes, 0x33);
     const auto error = run(Op::get_key, b).error;
     if (c.expected.empty()) {
@@ -366,6 +442,25 @@ TEST(GetResponseCheckTest, SymmetricKeyMaterialMatchesItsLength) {
     } else {
       EXPECT_NE(error.find(c.expected), std::string::npos)
           << "case " << i << ": " << error;
+    }
+  }
+}
+
+// KMIP 2.0 puts attributes encapsulated with the key material in an
+// Attributes structure in the Key Value (2.0 §3.2); the Key Block may then
+// leave algorithm and length out.
+TEST(GetResponseCheckTest, KeyValueAttributesAreRead) {
+  for (const auto [length, expected] :
+       {std::pair{256, ""}, std::pair{128, "Cryptographic Length is 128"}}) {
+    SCOPED_TRACE(length);
+    Behavior b;  // 32 bytes of AES; Get Attributes states no length
+    b.length = length;
+    b.lengths_in_key_value = true;
+    const auto out = run(Op::get_key, b, kmipcore::KMIP_VERSION_2_0);
+    if (*expected == '\0') {
+      EXPECT_EQ(out.error, "");
+    } else {
+      EXPECT_NE(out.error.find(expected), std::string::npos) << out.error;
     }
   }
 }

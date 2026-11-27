@@ -13,6 +13,12 @@ Unreleased
     symmetric key with no stated length, are rejected. A key registered
     elsewhere with a length that does not match its material can no longer
     be fetched. New: kmipcore::KeyParser::checkSymmetricKeyMaterial().
+    op_get_key also rejects a symmetric key whose Key Block and attributes
+    name different Cryptographic Algorithms (KMIP_INVALID_ENCODING), and
+    skips a re-fetch in a preferred Key Format Type that returns another
+    type of object, keeping the key it got first.
+    KeyParser now also reads the KMIP 2.0 Attributes structure in a Key
+    Value (2.0 §3.2), so a length stated only there is found.
 
 Oct, 2026 Version 0.4.0
 
