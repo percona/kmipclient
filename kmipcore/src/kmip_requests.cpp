@@ -343,7 +343,6 @@ namespace kmipcore {
               KMIP_NOT_IMPLEMENTED,
               "Certificate registration is not yet supported"
           );
-        case KeyType::UNSET:
         default:
           throw KmipException(
               KMIP_INVALID_FIELD, "Unsupported key type for Register"
@@ -360,7 +359,6 @@ namespace kmipcore {
           return KMIP_OBJTYPE_PUBLIC_KEY;
         case KeyType::CERTIFICATE:
           return KMIP_OBJTYPE_CERTIFICATE;
-        case KeyType::UNSET:
         default:
           throw KmipException(
               KMIP_INVALID_FIELD, "Unsupported key type for Register"

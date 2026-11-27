@@ -186,7 +186,6 @@ namespace kmiputil {
         return public_key_to_pem(key);
       case kmipclient::KeyType::SYMMETRIC_KEY:
         return symmetric_key_to_pem(key);
-      case kmipclient::KeyType::UNSET:
       default:
         throw kmipcore::KmipException(
             "Cannot write key as PEM: unsupported key type"
