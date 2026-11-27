@@ -354,7 +354,7 @@ All derived key types expose these common `Key` accessors:
 
 | Method | Return type | Description |
 |---|---|---|
-| `value()` | `const std::vector<unsigned char> &` | Raw key bytes |
+| `value()` | `const kmipcore::secure_bytes &` | Raw key bytes (zeroed when freed) |
 | `type()` | `KeyType` | Key family (`SYMMETRIC_KEY`, `PUBLIC_KEY`, …) |
 | `algorithm()` | `cryptographic_algorithm` | KMIP cryptographic algorithm enum |
 | `usage_mask()` | `cryptographic_usage_mask` | KMIP usage mask flags |
@@ -380,8 +380,8 @@ Objects returned by `op_get_secret` are instances of `kmipcore::Secret`:
 
 | Method | Return type | Description |
 |---|---|---|
-| `value()` | `const std::vector<unsigned char> &` | Raw payload bytes |
-| `as_text()` | `std::string` | Payload as a UTF-8 string copy |
+| `value()` | `const kmipcore::secure_bytes &` | Raw payload bytes (zeroed when freed) |
+| `as_text()` | `kmipcore::secure_string` | Payload as text (zeroed when freed) |
 | `get_state()` | `state` | KMIP lifecycle state |
 | `get_secret_type()` | `secret_data_type` | KMIP secret data type (e.g. `KMIP_SECDATA_PASSWORD`) |
 | `attributes()` | `const std::unordered_map<std::string, std::string> &` | Full attribute map |
@@ -553,7 +553,7 @@ try {
 
 ```cpp
 auto secret = client.op_get_secret(id, /*all_attributes=*/true);
-// secret.as_text()              → payload as std::string
+// secret.as_text()              → payload as kmipcore::secure_string
 // secret.get_state()            → KMIP lifecycle state
 // secret.get_secret_type()      → KMIP secret data type
 // secret.attribute_value(name)  → attribute string, "" if absent (noexcept)

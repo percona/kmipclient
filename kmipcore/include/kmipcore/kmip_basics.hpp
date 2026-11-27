@@ -9,8 +9,10 @@
 #define KMIPCORE_KMIP_BASICS_HPP
 
 #include "kmipcore/kmip_enums.hpp"
+#include "kmipcore/secure_memory.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <span>
 #include <string>
@@ -42,9 +44,13 @@ namespace kmipcore {
   struct LongInteger {
     int64_t value;
   };
+  // The string-like wrappers below hold their bytes in zeroed-on-free
+  // storage: keys, secret data and passwords travel through them on the way
+  // to and from the wire, and any plain copy here would outlive the request.
+
   /** @brief TTLV Big Integer wrapper. */
   struct BigInteger {
-    std::vector<uint8_t> value;
+    secure_bytes value;
   };
   /** @brief TTLV Enumeration wrapper. */
   struct Enumeration {
@@ -57,11 +63,11 @@ namespace kmipcore {
       // representation
   /** @brief TTLV Text String wrapper. */
   struct TextString {
-    std::string value;
+    secure_string value;
   };
   /** @brief TTLV Byte String wrapper. */
   struct ByteString {
-    std::vector<uint8_t> value;
+    secure_bytes value;
   };
   /** @brief TTLV Date-Time wrapper (POSIX time). */
   struct DateTime {
@@ -140,7 +146,10 @@ namespace kmipcore {
     static std::shared_ptr<Element> createLongInteger(Tag t, int64_t v);
     /** @brief Creates a Big Integer element. */
     static std::shared_ptr<Element>
-        createBigInteger(Tag t, const std::vector<uint8_t> &v);
+        createBigInteger(Tag t, std::span<const uint8_t> v);
+    /** @brief Creates a Big Integer element from a list of bytes. */
+    static std::shared_ptr<Element>
+        createBigInteger(Tag t, std::initializer_list<uint8_t> v);
     /** @brief Creates an Enumeration element. */
     static std::shared_ptr<Element> createEnumeration(Tag t, int32_t v);
     /** @brief Creates a Boolean element. */
@@ -149,7 +158,10 @@ namespace kmipcore {
     static std::shared_ptr<Element> createTextString(Tag t, std::string_view v);
     /** @brief Creates a Byte String element. */
     static std::shared_ptr<Element>
-        createByteString(Tag t, const std::vector<uint8_t> &v);
+        createByteString(Tag t, std::span<const uint8_t> v);
+    /** @brief Creates a Byte String element from a list of bytes. */
+    static std::shared_ptr<Element>
+        createByteString(Tag t, std::initializer_list<uint8_t> v);
     /** @brief Creates a Date-Time element (seconds since Unix epoch). */
     static std::shared_ptr<Element> createDateTime(Tag t, int64_t v);
     /** @brief Creates a Date-Time Extended element (KMIP 2.0, microseconds
@@ -194,6 +206,19 @@ namespace kmipcore {
     [[nodiscard]] std::string toString() const;
     /** @brief Converts value to Byte String representation. */
     [[nodiscard]] std::vector<uint8_t> toBytes() const;
+    /**
+     * @brief Returns a view of a Text String value without copying it.
+     *
+     * The view is valid while this element is alive and unchanged.
+     */
+    [[nodiscard]] std::string_view stringView() const;
+    /**
+     * @brief Returns a view of a Byte String or Big Integer value without
+     *        copying it.
+     *
+     * The view is valid while this element is alive and unchanged.
+     */
+    [[nodiscard]] std::span<const uint8_t> bytesView() const;
     /** @brief Converts value to Enumeration representation. */
     [[nodiscard]] int32_t toEnum() const;
     /** @brief Converts value to Interval representation. */

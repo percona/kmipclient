@@ -10,8 +10,11 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <new>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace kmipcore {
@@ -85,16 +88,86 @@ namespace kmipcore {
   using secure_bytes =
       std::vector<unsigned char, secure_allocator<unsigned char>>;
 
-  /** @brief String whose storage is zeroed when freed. */
-  using secure_string =
-      std::basic_string<char, std::char_traits<char>, secure_allocator<char>>;
+  /**
+   * @brief String whose storage is zeroed when it is released.
+   *
+   * A std::basic_string with @ref secure_allocator, so heap storage is
+   * zeroed when it is freed. Short values (up to 15 characters with
+   * libstdc++, 22 with libc++) live in a buffer inside the string object
+   * instead, which the allocator never sees: the destructor and the move
+   * operations zero that buffer too, so no copy of the value is left in the
+   * object once it is destroyed or moved from. While it is alive, clear(), a
+   * shorter assignment or growth to the heap may leave bytes in the inline
+   * buffer until then; wipe() removes them at once.
+   *
+   * Use it as a std::basic_string, with these limits:
+   * - Do not destroy it through a pointer to the base class, and do not slice
+   *   it into one: the base class destructor does not zero the inline buffer.
+   * - operator+ and substr() return plain base_type strings, which are not
+   *   wiped either: construct a secure_string from the result.
+   * - The inherited mutators (append(), operator+= ...) return base_type&.
+   */
+  class secure_string
+    : public std::
+          basic_string<char, std::char_traits<char>, secure_allocator<char>> {
+  public:
+    using base_type =
+        std::basic_string<char, std::char_traits<char>, secure_allocator<char>>;
+
+    using base_type::base_type;
+    secure_string() noexcept = default;
+    secure_string(const secure_string &) = default;
+    secure_string(secure_string &&other) noexcept
+      : base_type(std::move(static_cast<base_type &>(other))) {
+      other.wipe();
+    }
+    secure_string(const base_type &other) : base_type(other) {}
+    secure_string(base_type &&other) noexcept : base_type(std::move(other)) {
+      wipe(other);
+    }
+
+    secure_string &operator=(const secure_string &) = default;
+    secure_string &operator=(secure_string &&other) noexcept {
+      if (this != &other) {
+        wipe();
+        base_type::operator=(std::move(static_cast<base_type &>(other)));
+        other.wipe();
+      }
+      return *this;
+    }
+    using base_type::operator=;
+    /** Takes the value of a plain string and wipes that string. */
+    secure_string &operator=(base_type &&other) noexcept {
+      wipe();
+      base_type::operator=(std::move(other));
+      wipe(other);
+      return *this;
+    }
+
+    ~secure_string() { wipe(); }
+
+    /** @brief Empties the string and zeroes all of its storage. */
+    void wipe() noexcept { wipe(*this); }
+
+  private:
+    // Empties the string and makes it use its inline buffer again:
+    // shrink_to_fit() of an empty string releases heap storage through
+    // secure_allocator, which zeroes it. Then zeroes the buffer in use (the
+    // inline one, or the heap block if the library kept it).
+    static void wipe(base_type &s) noexcept {
+      s.clear();
+      s.shrink_to_fit();
+      secure_clear(s.data(), s.capacity() + 1);
+    }
+  };
 
   // ---- Heterogeneous comparisons ----
   //
   // secure_bytes / secure_string differ from the default-allocator containers
-  // only in their allocator type, but the standard comparison operators are not
-  // heterogeneous across allocators. These let callers and tests compare secure
-  // and plain containers element-wise without copying secrets into a plain one.
+  // only in their allocator type (and secure_string in its wiping), but the
+  // standard comparison operators are not heterogeneous across allocators.
+  // These let callers and tests compare secure and plain containers
+  // element-wise without copying secrets into a plain one.
 
   inline bool
       operator==(const secure_bytes &a, const std::vector<unsigned char> &b) {
@@ -125,7 +198,29 @@ namespace kmipcore {
   inline bool operator!=(const std::string &a, const secure_string &b) {
     return !(b == a);
   }
+  // Exact matches for string literals: otherwise the std::string overloads
+  // above and std::basic_string's own (const char *) ones are ambiguous for
+  // a secure_string.
+  inline bool operator==(const secure_string &a, const char *b) {
+    return std::string_view(a) == std::string_view(b);
+  }
+  inline bool operator==(const char *a, const secure_string &b) {
+    return b == a;
+  }
+  inline bool operator!=(const secure_string &a, const char *b) {
+    return !(a == b);
+  }
+  inline bool operator!=(const char *a, const secure_string &b) {
+    return !(b == a);
+  }
 
 }  // namespace kmipcore
+
+/** Hashes a secure_string like the std::string_view of its value. */
+template<> struct std::hash<kmipcore::secure_string> {
+  std::size_t operator()(const kmipcore::secure_string &s) const noexcept {
+    return std::hash<std::string_view>{}(s);
+  }
+};
 
 #endif  // KMIPCORE_SECURE_MEMORY_HPP

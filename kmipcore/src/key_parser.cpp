@@ -15,8 +15,8 @@ namespace kmipcore {
 
   namespace {
 
-    /** Copies Key Material straight into zeroed-on-free memory. toBytes()
-     * would return another, plain copy of the key that is never zeroed. */
+    /** Copies Key Material into zeroed-on-free memory. toBytes() would
+     * return a plain copy of the key that is never zeroed. */
     secure_bytes secure_key_material(const Element &key_material) {
       const auto *bytes = std::get_if<ByteString>(&key_material.value);
       if (!bytes) {
@@ -24,7 +24,7 @@ namespace kmipcore {
             KMIP_INVALID_ENCODING, "Key Material is not a byte string."
         );
       }
-      return secure_bytes(bytes->value.begin(), bytes->value.end());
+      return bytes->value;
     }
 
     /** Extract a Key from an element that contains a KeyBlock (Symmetric Key,

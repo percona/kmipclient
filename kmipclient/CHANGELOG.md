@@ -1,3 +1,24 @@
+Unreleased
+
+    kmipcore changes the TTLV value types: TextString,
+    ByteString and BigInteger hold their bytes in zeroed-on-free storage
+    (kmipcore::secure_string and secure_bytes) instead of std::string and
+    std::vector<uint8_t>. Code that reads or builds these members directly
+    must change; Element::stringView() and Element::bytesView() return the
+    value without a copy, toString() and toBytes() still return plain copies.
+    Element::createByteString() and createBigInteger() take
+    std::span<const uint8_t> or a braced list of bytes instead of
+    const std::vector<uint8_t>&; calls with a vector still compile.
+    kmipcore::secure_string is now a class derived from std::basic_string
+    (it was an alias): its destructor, move operations and assignment from
+    a plain string rvalue also zero the buffer inside the object that holds
+    short values, which the allocator never sees. New:
+    secure_string::wipe() and std::hash<secure_string>. Source changes: do
+    not destroy or slice a secure_string through its base class; operator+
+    and substr() return the plain base string; the inherited mutators
+    (append(), operator+= ...) return a reference to the base class; there
+    is no std::formatter for it (format std::string_view(s) instead).
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
