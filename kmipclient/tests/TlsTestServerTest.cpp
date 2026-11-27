@@ -168,9 +168,11 @@ TEST(TlsTestServerTest, Ipv6ServerAcceptsAConnectionToIpv6Loopback) {
   );
   client.set_tls_verification({true, false});  // the chain only
   EXPECT_TRUE(client.connect());
+  // With TLS 1.3 the client is done first; closing now could end the
+  // server's side of the handshake.
+  EXPECT_TRUE(server.wait_for_handshakes(1));
   client.close();
   EXPECT_TRUE(server.wait_for_completed(1));
-  EXPECT_EQ(server.handshakes(), 1);
   EXPECT_EQ(server.error(), "");
 }
 
