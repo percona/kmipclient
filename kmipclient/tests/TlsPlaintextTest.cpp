@@ -18,8 +18,10 @@
 #if !defined(_WIN32) && defined(SSL_OP_CLEANSE_PLAINTEXT)
 
   #include "TlsTestServer.hpp"
+  #include "kmipclient/KmipIOException.hpp"
 
   #include <algorithm>
+  #include <array>
   #include <atomic>
   #include <cstdint>
   #include <cstdlib>
@@ -27,6 +29,7 @@
   #include <mutex>
   #include <openssl/crypto.h>
   #include <string_view>
+  #include <thread>
   #include <unordered_map>
   #include <vector>
 
@@ -41,18 +44,30 @@ namespace {
   }
 
   // ---- OpenSSL allocator that tracks its live blocks ----
+  //
+  // Only the blocks that the test's own thread allocates are searched. The
+  // TlsTestServer thread uses OpenSSL at the same time, and its blocks hold
+  // the response it sends.
 
-  std::mutex g_mutex;
+  struct Block {
+    size_t size;
+    std::thread::id owner;
+  };
+
   // Never destroyed: OpenSSL frees memory at exit.
-  auto &g_live = *new std::unordered_map<void *, size_t>;  // block -> size
+  auto &g_mutex = *new std::mutex;
+  auto &g_live = *new std::unordered_map<void *, Block>;  // guarded by g_mutex
+  const std::thread::id g_test_thread = std::this_thread::get_id();
   std::atomic<bool> g_scan_frees{false};
   std::atomic<int> g_freed_hits{0};
 
+  // Zeroed, so that a block holds only what OpenSSL writes to it, not bytes
+  // that an earlier exchange left on the heap.
   void *hook_malloc(size_t n, const char *, int) {
-    void *p = std::malloc(n == 0 ? 1 : n);
+    void *p = std::calloc(1, n == 0 ? 1 : n);
     if (p != nullptr) {
       const std::lock_guard<std::mutex> lock(g_mutex);
-      g_live[p] = n;
+      g_live[p] = {n, std::this_thread::get_id()};
     }
     return p;
   }
@@ -61,16 +76,17 @@ namespace {
     if (p == nullptr) {
       return;
     }
-    size_t n = 0;
+    Block block{0, {}};
     {
       const std::lock_guard<std::mutex> lock(g_mutex);
       const auto it = g_live.find(p);
       if (it != g_live.end()) {
-        n = it->second;
+        block = it->second;
         g_live.erase(it);
       }
     }
-    if (g_scan_frees && holds_marker(p, n)) {
+    if (g_scan_frees && block.owner == g_test_thread &&
+        holds_marker(p, block.size)) {
       ++g_freed_hits;
     }
     std::free(p);
@@ -83,7 +99,7 @@ namespace {
       size_t old_size = 0;
       {
         const std::lock_guard<std::mutex> lock(g_mutex);
-        old_size = g_live.at(p);
+        old_size = g_live.at(p).size;
       }
       std::memcpy(fresh, p, std::min(old_size, n));
       hook_free(p, file, line);
@@ -94,8 +110,10 @@ namespace {
   int live_blocks_holding_marker() {
     const std::lock_guard<std::mutex> lock(g_mutex);
     int hits = 0;
-    for (const auto &[block, size] : g_live) {
-      hits += holds_marker(block, size) ? 1 : 0;
+    for (const auto &[p, block] : g_live) {
+      if (block.owner == g_test_thread && holds_marker(p, block.size)) {
+        ++hits;
+      }
     }
     return hits;
   }
@@ -118,16 +136,36 @@ namespace {
     return msg;
   }
 
+  // How much of the response the client reads before it closes.
+  enum class Read {
+    Whole,       // IOUtils::do_exchange()
+    HeaderOnly,  // only the 8-byte header; the body stays unread
+    OverLimit,   // do_exchange() refuses the length and closes
+  };
+
+  struct Case {
+    const char *name;
+    uint32_t body_size;
+    Read read;
+  };
+
 }  // namespace
 
 TEST(TlsPlaintextTest, DecryptedResponseIsZeroed) {
   ASSERT_TRUE(g_hooked) << "OpenSSL allocated memory before the hook";
   using namespace kmipclient::test;
 
-  // One TLS record, and several (records hold at most 16 KiB).
-  for (const uint32_t size : {64u, 40000u}) {
-    SCOPED_TRACE("response body of " + std::to_string(size) + " bytes");
+  const Case cases[] = {
+      {"one record", 64, Read::Whole},
+      // TLS records hold at most 16 KiB.
+      {"several records", 40000, Read::Whole},
+      {"record left unread", 64, Read::HeaderOnly},
+      {"record over the size limit", 64, Read::OverLimit},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.name);
     const auto request = message(48, false);
+    const auto response = message(c.body_size, true);
 
     TempDir dir;
     TestCert cert(dir, "server", "IP:127.0.0.1");
@@ -137,7 +175,6 @@ TEST(TlsPlaintextTest, DecryptedResponseIsZeroed) {
       if (SSL_read_ex(ssl, in.data(), in.size(), &got) != 1) {
         return;
       }
-      const auto response = message(size, true);
       SSL_write(ssl, response.data(), static_cast<int>(response.size()));
       uint8_t byte = 0;
       while (SSL_read(ssl, &byte, 1) > 0) {  // wait until the client closes
@@ -148,19 +185,40 @@ TEST(TlsPlaintextTest, DecryptedResponseIsZeroed) {
         "127.0.0.1", server.port(), cert.cert(), cert.key(), cert.cert(), 5000
     );
     client.connect();
-    {
-      kmipclient::IOUtils io(client);
-      kmipcore::secure_bytes response;
-      io.do_exchange(request, response, 1024 * 1024);
-      ASSERT_EQ(response.size(), 8 + size);
+    g_freed_hits = 0;
+
+    switch (c.read) {
+      case Read::Whole: {
+        kmipclient::IOUtils io(client);
+        kmipcore::secure_bytes received;
+        io.do_exchange(request, received, 1024 * 1024);
+        ASSERT_TRUE(std::ranges::equal(received, response))
+            << "the response did not arrive as sent";
+        EXPECT_EQ(live_blocks_holding_marker(), 0)
+            << "memory OpenSSL holds still has the decrypted response";
+        break;
+      }
+      case Read::HeaderOnly: {
+        ASSERT_EQ(client.send(request), static_cast<int>(request.size()));
+        std::array<uint8_t, 8> header{};
+        ASSERT_EQ(client.recv(header), static_cast<int>(header.size()));
+        // OpenSSL has decrypted the whole record; the body is not read yet.
+        EXPECT_GT(live_blocks_holding_marker(), 0)
+            << "the scan does not see the unread response";
+        break;
+      }
+      case Read::OverLimit: {
+        kmipclient::IOUtils io(client);
+        kmipcore::secure_bytes received;
+        g_scan_frees = true;
+        EXPECT_THROW(
+            io.do_exchange(request, received, 16), kmipclient::KmipIOException
+        );
+        g_scan_frees = false;
+        break;
+      }
     }
 
-    // The client is idle. The server's blocks are scanned too; they hold
-    // only ciphertext of the response, since OpenSSL encrypts in place.
-    EXPECT_EQ(live_blocks_holding_marker(), 0)
-        << "memory OpenSSL holds still has the decrypted response";
-
-    g_freed_hits = 0;
     g_scan_frees = true;
     client.close();
     g_scan_frees = false;
