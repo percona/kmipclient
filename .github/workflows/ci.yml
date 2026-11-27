@@ -161,22 +161,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install OpenSSL
-        run: choco install openssl -y --no-progress
-
       - name: Locate OpenSSL
         shell: bash
         run: |
-          for dir in "/c/Program Files/OpenSSL" "/c/Program Files/OpenSSL-Win64"; do
-            if [ -e "$dir/include/openssl/ssl.h" ]; then
-              win=$(cygpath -w "$dir")
-              echo "OPENSSL_ROOT_DIR=$win" >> "$GITHUB_ENV"
-              echo "$win\\bin" >> "$GITHUB_PATH"
-              exit 0
-            fi
-          done
-          echo "::error::OpenSSL install not found"
-          exit 1
+          dir="/c/Program Files/OpenSSL"
+          if [ ! -e "$dir/include/openssl/ssl.h" ]; then
+            echo "::error::The runner image has no OpenSSL with headers in $dir"
+            exit 1
+          fi
+          "$dir/bin/openssl.exe" version
+          win=$(cygpath -w "$dir")
+          echo "OPENSSL_ROOT_DIR=$win" >> "$GITHUB_ENV"
+          echo "$win\\bin" >> "$GITHUB_PATH"
 
       - name: Configure
         run: cmake -S . -B build -DBUILD_TESTS=ON
