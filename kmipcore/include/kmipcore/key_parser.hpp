@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace kmipcore {
 
@@ -42,6 +43,24 @@ namespace kmipcore {
      */
     static std::optional<int32_t>
         keyFormatType(const GetResponseBatchItem &item);
+
+    /**
+     * @brief Checks symmetric key material against its attributes; throws
+     *        KmipException when they disagree.
+     *
+     * The material must not be empty, and Raw material must be as long as a
+     * stated Cryptographic Length, which is "the length in bits of the
+     * clear-text cryptographic key material" (KMIP 1.4 §3.5, 2.0 §4.15).
+     * DES and 3DES material may also carry one parity bit per byte (1.4
+     * §2.1.3, 2.0 §3.1), so 8/7 of the length is accepted for them too.
+     * parseGetKeyResponse() runs it against the Key Block; callers that add
+     * attributes from elsewhere (Get Attributes) can run it again.
+     */
+    static void checkSymmetricKeyMaterial(
+        std::span<const unsigned char> material,
+        int32_t key_format,
+        const Attributes &attributes
+    );
 
   private:
     /** @brief Internal key parser used by typed public entry points. */

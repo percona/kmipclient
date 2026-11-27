@@ -836,6 +836,96 @@ void test_key_parser_key_format_type() {
   std::cout << "KeyParser::keyFormatType test passed" << std::endl;
 }
 
+// parseGetKeyResponse() checks Raw symmetric key material against the
+// Key Block's Cryptographic Length; other formats only for emptiness.
+void test_key_parser_checks_symmetric_key_material() {
+  auto get_symmetric_key = [](int32_t length, std::size_t bytes) {
+    auto key_value = Element::createStructure(tag::KMIP_TAG_KEY_VALUE);
+    key_value->asStructure()->add(
+        Element::createByteString(
+            tag::KMIP_TAG_KEY_MATERIAL, std::vector<uint8_t>(bytes, 0x42)
+        )
+    );
+    auto key_block = Element::createStructure(tag::KMIP_TAG_KEY_BLOCK);
+    key_block->asStructure()->add(
+        Element::createEnumeration(
+            tag::KMIP_TAG_KEY_FORMAT_TYPE, KMIP_KEYFORMAT_RAW
+        )
+    );
+    key_block->asStructure()->add(key_value);
+    key_block->asStructure()->add(
+        Element::createEnumeration(
+            tag::KMIP_TAG_CRYPTOGRAPHIC_ALGORITHM, KMIP_CRYPTOALG_AES
+        )
+    );
+    key_block->asStructure()->add(
+        Element::createInteger(tag::KMIP_TAG_CRYPTOGRAPHIC_LENGTH, length)
+    );
+    auto key = Element::createStructure(tag::KMIP_TAG_SYMMETRIC_KEY);
+    key->asStructure()->add(key_block);
+    auto payload = Element::createStructure(tag::KMIP_TAG_RESPONSE_PAYLOAD);
+    payload->asStructure()->add(
+        Element::createEnumeration(
+            tag::KMIP_TAG_OBJECT_TYPE, KMIP_OBJTYPE_SYMMETRIC_KEY
+        )
+    );
+    payload->asStructure()->add(
+        Element::createTextString(tag::KMIP_TAG_UNIQUE_IDENTIFIER, "id-1")
+    );
+    payload->asStructure()->add(key);
+    ResponseBatchItem item;
+    item.setOperation(KMIP_OP_GET);
+    item.setResultStatus(KMIP_STATUS_SUCCESS);
+    item.setResponsePayload(payload);
+    return GetResponseBatchItem::fromBatchItem(item);
+  };
+  // The error for f(), or "" if it did not throw.
+  auto error_of = [](const auto &f) -> std::string {
+    try {
+      f();
+    } catch (const KmipException &e) {
+      assert(e.code().value() == KMIP_INVALID_ENCODING);
+      return e.what();
+    }
+    return "";
+  };
+
+  assert(
+      KeyParser::parseGetKeyResponse(get_symmetric_key(256, 32))
+          .value()
+          .size() == 32
+  );
+  assert(error_of([&] {
+           (void) KeyParser::parseGetKeyResponse(get_symmetric_key(256, 16));
+         }).find("Cryptographic Length is 256") != std::string::npos);
+  assert(error_of([&] {
+           (void) KeyParser::parseGetKeyResponse(get_symmetric_key(256, 0));
+         }).find("is empty") != std::string::npos);
+
+  // Only Raw material is checked against the length.
+  Attributes attrs;
+  attrs.set_algorithm(cryptographic_algorithm::KMIP_CRYPTOALG_AES);
+  attrs.set_crypto_length(256);
+  const std::vector<unsigned char> five(5, 0x42);
+  assert(error_of([&] {
+           KeyParser::checkSymmetricKeyMaterial(
+               five, KMIP_KEYFORMAT_OPAQUE, attrs
+           );
+         }) == "");
+  assert(error_of([&] {
+           KeyParser::checkSymmetricKeyMaterial(
+               five, KMIP_KEYFORMAT_RAW, attrs
+           );
+         }).find("has 40 bits") != std::string::npos);
+  assert(error_of([&] {
+           KeyParser::checkSymmetricKeyMaterial(
+               {}, KMIP_KEYFORMAT_OPAQUE, attrs
+           );
+         }).find("is empty") != std::string::npos);
+
+  std::cout << "KeyParser symmetric key material test passed" << std::endl;
+}
+
 // Register declares the value's recorded Key Format Type, else the default
 // of its type.
 void test_register_key_request_key_format() {
@@ -1516,6 +1606,7 @@ int main() {
   test_register_key_request_algorithm_and_length();
   test_get_request_key_format_type();
   test_key_parser_key_format_type();
+  test_key_parser_checks_symmetric_key_material();
   test_register_key_request_key_format();
   test_attributes_parser();
   test_attributes_parser_extended();

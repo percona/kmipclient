@@ -26,6 +26,117 @@
 
 namespace kmipclient {
 
+  namespace {
+
+    // An identifier, shortened and made printable for an error message.
+    std::string quoted_id(const std::string &id) {
+      constexpr std::size_t max_shown = 64;
+      std::string shown;
+      for (const char c : id.substr(0, max_shown)) {
+        shown += (c >= 0x20 && c < 0x7F) ? c : '?';
+      }
+      return "'" + shown + (id.size() > max_shown ? "...'" : "'");
+    }
+
+    // A response that names the object it is about must name the one that
+    // was asked for (Get: KMIP 1.4 §4.11 / 2.0 §6.1.19, Get Attributes:
+    // 1.4 Table 197 / 2.0 Table 209). KMIP_OBJECT_MISMATCH is a client-side
+    // code: unlike a server's Result Reason it does not make the KMIP 2.0
+    // Get Attributes retry run.
+    void expect_requested_object(
+        const std::string &requested,
+        const std::string &returned,
+        const char *operation
+    ) {
+      if (returned != requested) {
+        throw kmipcore::KmipException(
+            kmipcore::KMIP_OBJECT_MISMATCH,
+            std::string(operation) + " response is for object " +
+                quoted_id(returned) + ", not the requested " +
+                quoted_id(requested)
+        );
+      }
+    }
+
+    void expect_requested_object(
+        const std::string &requested,
+        const kmipcore::GetResponseBatchItem &response
+    ) {
+      expect_requested_object(requested, response.getUniqueIdentifier(), "Get");
+    }
+
+    void expect_requested_object(
+        const std::string &requested,
+        const kmipcore::GetAttributesResponseBatchItem &response
+    ) {
+      if (const auto &returned = response.getUniqueIdentifier()) {
+        expect_requested_object(requested, *returned, "Get Attributes");
+      }
+    }
+
+    // Reads the response for batch_item_id and checks that it is about the
+    // object `requested`.
+    template<typename Item>
+    Item response_for_object(
+        kmipcore::ResponseParser &rf,
+        uint32_t batch_item_id,
+        const std::string &requested
+    ) {
+      auto item = rf.getResponseByBatchItemId<Item>(batch_item_id);
+      expect_requested_object(requested, item);
+      return item;
+    }
+
+    // Adds the Get Attributes answer to the key's attributes. For a
+    // symmetric key it first checks that both name the same algorithm,
+    // then checks the key material against the result: KeyParser has
+    // checked it against the Key Block's length, this checks the length in
+    // the answer. (For DES and 3DES both 168 and 192 describe 24 bytes,
+    // with and without the parity bits, so lengths are not compared.)
+    void add_server_attributes(
+        Key &key, const kmipcore::Attributes &server_attrs
+    ) {
+      if (key.type() != KeyType::SYMMETRIC_KEY) {
+        key.attributes().merge(server_attrs);
+        return;
+      }
+      constexpr auto unset =
+          kmipcore::cryptographic_algorithm::KMIP_CRYPTOALG_UNSET;
+      const auto own_algorithm = key.attributes().algorithm();
+      const auto server_algorithm = server_attrs.algorithm();
+      if (own_algorithm != unset && server_algorithm != unset &&
+          own_algorithm != server_algorithm) {
+        throw kmipcore::KmipException(
+            kmipcore::KMIP_INVALID_ENCODING,
+            "The Symmetric Key's Cryptographic Algorithm is " +
+                std::to_string(static_cast<int32_t>(own_algorithm)) +
+                " in its Key Block, but " +
+                std::to_string(static_cast<int32_t>(server_algorithm)) +
+                " in its attributes."
+        );
+      }
+      key.attributes().merge(server_attrs);
+
+      const auto format =
+          key.key_format().value_or(kmipcore::KMIP_KEYFORMAT_RAW);
+      // The Key Block SHALL state the length with the algorithm (1.4
+      // Table 7, 2.0 §3.1), and the attribute SHALL always have a value
+      // (1.4 §3.5, 2.0 §4.15): without it the material cannot be checked.
+      if (format == kmipcore::KMIP_KEYFORMAT_RAW &&
+          !key.attributes().crypto_length()) {
+        throw kmipcore::KmipException(
+            kmipcore::KMIP_INVALID_ENCODING,
+            "The Symmetric Key has no Cryptographic Length, neither in its "
+            "Key Block nor in its attributes."
+        );
+      }
+      kmipcore::KeyParser::checkSymmetricKeyMaterial(
+          key.value(), format, key.attributes()
+      );
+    }
+
+  }  // namespace
+
   static std::vector<std::string> default_get_key_attrs(bool all_attributes) {
     if (all_attributes) {
       return {};
@@ -306,14 +417,15 @@ namespace kmipclient {
   std::unique_ptr<Key>
       KmipClient::op_get_key(const std::string &id, bool all_attributes) const {
     const auto requested_attrs = default_get_key_attrs(all_attributes);
-    const auto execute = [&](bool legacy_attribute_names_for_v2) {
+    const auto execute = [&](const std::vector<std::string> &selectors,
+                             bool legacy_attribute_names_for_v2) {
       auto request = make_request_message();
       const auto get_item_id = request.add_batch_item(kmipcore::GetRequest(id));
 
       const auto attributes_item_id = request.add_batch_item(
           kmipcore::GetAttributesRequest(
               id,
-              requested_attrs,
+              selectors,
               request.getHeader().getProtocolVersion(),
               legacy_attribute_names_for_v2
           )
@@ -326,13 +438,13 @@ namespace kmipclient {
 
       kmipcore::ResponseParser rf(response_bytes, request);
       const auto get_response =
-          rf.getResponseByBatchItemId<kmipcore::GetResponseBatchItem>(
-              get_item_id
+          response_for_object<kmipcore::GetResponseBatchItem>(
+              rf, get_item_id, id
           );
 
       auto attrs_response =
-          rf.getResponseByBatchItemId<kmipcore::GetAttributesResponseBatchItem>(
-              attributes_item_id
+          response_for_object<kmipcore::GetAttributesResponseBatchItem>(
+              rf, attributes_item_id, id
           );
       kmipcore::Attributes server_attrs =
           kmipcore::AttributesParser::parse(attrs_response.getAttributes());
@@ -347,13 +459,13 @@ namespace kmipclient {
       // ask for the key again: the retries below are for Get Attributes
       // errors and must neither see nor repeat its requests.
       auto key = key_from_get_response(id, get_response);
-      // Merge server-provided metadata (state, name, dates, …) into the key.
-      key->attributes().merge(server_attrs);
+      // Server-provided metadata (state, name, dates, ...).
+      add_server_attributes(*key, server_attrs);
       return key;
     };
 
     try {
-      return execute(false);
+      return execute(requested_attrs, false);
     } catch (const kmipcore::KmipException &first_error) {
       if (!version_.is_at_least(2, 0) ||
           !should_retry_get_attributes_with_legacy_v2_encoding(first_error)) {
@@ -361,7 +473,7 @@ namespace kmipclient {
       }
     }
     try {
-      return execute(true);
+      return execute(requested_attrs, true);
     } catch (const kmipcore::KmipException &second_error) {
       if (requested_attrs.empty() ||
           !should_retry_get_attributes_with_legacy_v2_encoding(second_error)) {
@@ -370,37 +482,8 @@ namespace kmipclient {
     }
 
     // Compatibility fallback for servers that reject explicit selectors in
-    // Get Attributes requests: request all attributes and filter client-side.
-    auto request = make_request_message();
-    const auto get_item_id = request.add_batch_item(kmipcore::GetRequest(id));
-    const auto attributes_item_id = request.add_batch_item(
-        kmipcore::GetAttributesRequest(
-            id, {}, request.getHeader().getProtocolVersion(), true
-        )
-    );
-    kmipcore::secure_bytes response_bytes;
-    io->do_exchange(
-        request.serialize(), response_bytes, request.getMaxResponseSize()
-    );
-    kmipcore::ResponseParser rf(response_bytes, request);
-    const auto get_response =
-        rf.getResponseByBatchItemId<kmipcore::GetResponseBatchItem>(
-            get_item_id
-        );
-    auto attrs_response =
-        rf.getResponseByBatchItemId<kmipcore::GetAttributesResponseBatchItem>(
-            attributes_item_id
-        );
-    kmipcore::Attributes server_attrs =
-        kmipcore::AttributesParser::parse(attrs_response.getAttributes());
-    if (!server_attrs.has_attribute(KMIP_ATTR_NAME_STATE)) {
-      throw kmipcore::KmipException(
-          "Required attribute 'State' missing from server response"
-      );
-    }
-    auto key = key_from_get_response(id, get_response);
-    key->attributes().merge(server_attrs);
-    return key;
+    // Get Attributes requests: request all attributes.
+    return execute({}, true);
   }
 
   std::unique_ptr<Key> KmipClient::key_from_get_response(
@@ -440,16 +523,17 @@ namespace kmipclient {
         continue;
       }
       const auto refetched =
-          rf.getResponseByBatchItemId<kmipcore::GetResponseBatchItem>(
-              get_item_id
+          response_for_object<kmipcore::GetResponseBatchItem>(
+              rf, get_item_id, id
           );
-      if (kmipcore::KeyParser::keyFormatType(refetched) == format) {
+      if (refetched.getObjectType() == response.getObjectType() &&
+          kmipcore::KeyParser::keyFormatType(refetched) == format) {
         if (auto key = in_preferred_format(parse(refetched))) {
           return key;
         }
       }
-      // Answered in some other format, or under the PKCS#8 label with no
-      // SubjectPublicKeyInfo: as good as a refusal.
+      // Another type of object, answered in some other format, or under the
+      // PKCS#8 label with no SubjectPublicKeyInfo: as good as a refusal.
     }
 
     // No conversion: keep the server's own format, which key_format()
@@ -461,14 +545,15 @@ namespace kmipclient {
       const std::string &id, bool all_attributes
   ) const {
     const auto requested_attrs = default_get_secret_attrs(all_attributes);
-    const auto execute = [&](bool legacy_attribute_names_for_v2) {
+    const auto execute = [&](const std::vector<std::string> &selectors,
+                             bool legacy_attribute_names_for_v2) {
       auto request = make_request_message();
       const auto get_item_id = request.add_batch_item(kmipcore::GetRequest(id));
 
       const auto attributes_item_id = request.add_batch_item(
           kmipcore::GetAttributesRequest(
               id,
-              requested_attrs,
+              selectors,
               request.getHeader().getProtocolVersion(),
               legacy_attribute_names_for_v2
           )
@@ -480,15 +565,14 @@ namespace kmipclient {
       );
 
       kmipcore::ResponseParser rf(response_bytes, request);
-      auto get_response =
-          rf.getResponseByBatchItemId<kmipcore::GetResponseBatchItem>(
-              get_item_id
-          );
+      auto get_response = response_for_object<kmipcore::GetResponseBatchItem>(
+          rf, get_item_id, id
+      );
       Secret secret = kmipcore::KeyParser::parseGetSecretResponse(get_response);
 
       auto attrs_response =
-          rf.getResponseByBatchItemId<kmipcore::GetAttributesResponseBatchItem>(
-              attributes_item_id
+          response_for_object<kmipcore::GetAttributesResponseBatchItem>(
+              rf, attributes_item_id, id
           );
       kmipcore::Attributes server_attrs =
           kmipcore::AttributesParser::parse(attrs_response.getAttributes());
@@ -516,7 +600,7 @@ namespace kmipclient {
     };
 
     try {
-      return execute(false);
+      return execute(requested_attrs, false);
     } catch (const kmipcore::KmipException &first_error) {
       if (!version_.is_at_least(2, 0) ||
           !should_retry_get_attributes_with_legacy_v2_encoding(first_error)) {
@@ -524,7 +608,7 @@ namespace kmipclient {
       }
     }
     try {
-      return execute(true);
+      return execute(requested_attrs, true);
     } catch (const kmipcore::KmipException &second_error) {
       if (requested_attrs.empty() ||
           !should_retry_get_attributes_with_legacy_v2_encoding(second_error)) {
@@ -532,46 +616,9 @@ namespace kmipclient {
       }
     }
 
-    auto request = make_request_message();
-    const auto get_item_id = request.add_batch_item(kmipcore::GetRequest(id));
-    const auto attributes_item_id = request.add_batch_item(
-        kmipcore::GetAttributesRequest(
-            id, {}, request.getHeader().getProtocolVersion(), true
-        )
-    );
-    kmipcore::secure_bytes response_bytes;
-    io->do_exchange(
-        request.serialize(), response_bytes, request.getMaxResponseSize()
-    );
-    kmipcore::ResponseParser rf(response_bytes, request);
-    auto get_response =
-        rf.getResponseByBatchItemId<kmipcore::GetResponseBatchItem>(
-            get_item_id
-        );
-    Secret secret = kmipcore::KeyParser::parseGetSecretResponse(get_response);
-    auto attrs_response =
-        rf.getResponseByBatchItemId<kmipcore::GetAttributesResponseBatchItem>(
-            attributes_item_id
-        );
-    kmipcore::Attributes server_attrs =
-        kmipcore::AttributesParser::parse(attrs_response.getAttributes());
-    if (all_attributes) {
-      secret.attributes().merge(server_attrs);
-    } else {
-      if (!server_attrs.has_attribute(KMIP_ATTR_NAME_STATE)) {
-        throw kmipcore::KmipException(
-            "Required attribute 'State' missing from server response"
-        );
-      }
-      secret.set_state(server_attrs.object_state());
-      if (server_attrs.has_attribute(KMIP_ATTR_NAME_NAME)) {
-        secret.set_attribute(
-            KMIP_ATTR_NAME_NAME,
-            std::string(server_attrs.get(KMIP_ATTR_NAME_NAME))
-        );
-      }
-    }
-    return secret;
+    // Compatibility fallback for servers that reject explicit selectors in
+    // Get Attributes requests: request all attributes.
+    return execute({}, true);
   }
 
   std::string KmipClient::op_activate(const std::string &id) const {
@@ -633,8 +680,8 @@ namespace kmipclient {
 
       kmipcore::ResponseParser rf(response_bytes, request);
       auto response =
-          rf.getResponseByBatchItemId<kmipcore::GetAttributesResponseBatchItem>(
-              batch_item_id
+          response_for_object<kmipcore::GetAttributesResponseBatchItem>(
+              rf, batch_item_id, id
           );
       return kmipcore::AttributesParser::parse(response.getAttributes());
     };

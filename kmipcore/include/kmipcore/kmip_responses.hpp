@@ -11,6 +11,9 @@
 #include "kmipcore/kmip_errors.hpp"
 #include "kmipcore/kmip_protocol.hpp"
 
+#include <optional>
+#include <string>
+
 namespace kmipcore {
 
   namespace detail {
@@ -160,8 +163,19 @@ namespace kmipcore {
       return attributes_;
     }
 
+    /**
+     * @brief Returns the Unique Identifier of the object the attributes
+     *        belong to, when the payload has one (REQUIRED by KMIP 1.4
+     *        Table 197 and 2.0 Table 209, but not enforced here).
+     */
+    [[nodiscard]] const std::optional<std::string> &
+        getUniqueIdentifier() const {
+      return uniqueIdentifier_;
+    }
+
   private:
     std::vector<std::shared_ptr<Element>> attributes_;
+    std::optional<std::string> uniqueIdentifier_;
   };
 
   /** @brief Typed response for KMIP Get Attribute List operation. */
