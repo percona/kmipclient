@@ -74,7 +74,7 @@ namespace kmipclient {
      * KmipClientPool.
      */
     struct Config {
-      /** KMIP server host name or IP address. */
+      /** KMIP server host name or IP address, without a port. */
       std::string host;
       /** KMIP server service port. */
       std::string port;

@@ -1,3 +1,24 @@
+Unreleased
+
+    NetClientOpenSSL::connect(), and so Kmip and KmipClientPool, accepts as
+    the host only a host name or an IP address, without a port; an IPv6
+    address may be in brackets. For anything else it throws KmipIOException
+    before connecting, whatever the TLS options:
+    - an empty host ("KMIP server host name must not be empty"), and hosts
+      that name no host, such as ":", ":5696", "[]" and "*", which OpenSSL
+      used to connect to the local host;
+    - hosts OpenSSL cannot parse, such as "a:b:c", "[" and "[::1", which it
+      also connected to the local host;
+    - a host with a port, such as "kms.example:5696". OpenSSL took the
+      name from it, the port parameter overrode its port, and the host name
+      check failed on it, so it worked only without that check;
+    - through NetClientOpenSSL and KmipClientPool::Config, which take a
+      std::string, a host with a NUL byte (Kmip takes a const char *).
+    A bare IPv6 address such as "::1" now connects to that address; OpenSSL
+    could not parse it and connected to the local host. "[::1]" now passes
+    the host name check against an IP:::1 certificate; the brackets used to
+    be part of the name that was checked.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
