@@ -9,6 +9,7 @@
 
 #include "kmipclient/KmipIOException.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -431,31 +432,59 @@ namespace kmipclient {
     close();
   }
 
-  // True when OpenSSL would connect `host` to the local host because no host
-  // name is left once it is parsed: "", and also ":", ":5696", "[]", "*"
-  // (BIO_set_conn_hostname splits "host:port" with BIO_parse_hostserv()). A
-  // NUL byte would cut the name short for OpenSSL.
-  static bool has_no_host_name(const std::string &host) {
-    if (host.empty() || host.find('\0') != std::string::npos) {
-      return true;
-    }
-    char *name = nullptr;
-    char *service = nullptr;
-    const int parsed =
-        BIO_parse_hostserv(host.c_str(), &name, &service, BIO_PARSE_PRIO_HOST);
-    const bool no_name = parsed == 1 && (name == nullptr || *name == '\0');
-    OPENSSL_free(name);
-    OPENSSL_free(service);
-    ERR_clear_error();
-    return no_name;
-  }
+  // The server host in the two forms connect() needs.
+  struct ServerHost {
+    // For the certificate check and SNI: a DNS name or an IP address.
+    std::string name;
+    // For BIO_set_conn_hostname(): the name, with an IPv6 address in
+    // brackets, so that OpenSSL does not read its last part as a port.
+    std::string address;
+  };
 
-  bool NetClientOpenSSL::connect() {
-    if (has_no_host_name(m_host)) {
+  // The host is a DNS name or an IP address; an IPv6 address may be in
+  // brackets. Throws for anything else, before OpenSSL sees it: OpenSSL
+  // parses the host as "host:port", and connects to the local host when no
+  // host name is left (for "", ":5696", "[]" or "*") or when it cannot parse
+  // the host at all (for "a:b:c" or "["). A NUL byte would cut the name
+  // short. The port is a parameter of its own, so a host with a port is
+  // refused too.
+  static ServerHost parse_server_host(const std::string &host) {
+    if (host.empty()) {
       throw KmipIOException(
           kmipcore::KMIP_IO_FAILURE, "KMIP server host name must not be empty"
       );
     }
+    // c_str() shows the host up to a NUL byte.
+    const std::string shown =
+        "KMIP server host '" + std::string(host.c_str()) + "'";
+    if (host.find('\0') != std::string::npos) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE, shown + " contains a NUL byte"
+      );
+    }
+
+    const bool bracketed =
+        host.size() >= 2 && host.front() == '[' && host.back() == ']';
+    const std::string name = bracketed ? host.substr(1, host.size() - 2) : host;
+    // An IPv6 address has at least two colons; a2i_IPADDRESS() also takes
+    // ":" alone, as "::".
+    const bool ipv6 =
+        std::count(name.begin(), name.end(), ':') >= 2 && is_ip_address(name);
+    const bool valid =
+        ipv6 || (!bracketed && name.find_first_of(":[]*") == std::string::npos);
+    if (!valid) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          shown +
+              " is not a host name or an IP address (an IPv6 address may be "
+              "in brackets; the port is a separate parameter)"
+      );
+    }
+    return {name, ipv6 ? "[" + name + "]" : name};
+  }
+
+  bool NetClientOpenSSL::connect() {
+    const ServerHost server_host = parse_server_host(m_host);
     if (!m_isConnected) {
       bio_.reset();
       ctx_.reset();
@@ -529,10 +558,19 @@ namespace kmipclient {
       );
     }
 
-    configure_tls_verification(new_ctx.get(), ssl, m_host, m_tls_verification);
+    configure_tls_verification(
+        new_ctx.get(), ssl, server_host.name, m_tls_verification
+    );
 
     SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
-    BIO_set_conn_hostname(new_bio.get(), m_host.c_str());
+    if (BIO_set_conn_hostname(new_bio.get(), server_host.address.c_str()) !=
+        1) {
+      throw KmipIOException(
+          kmipcore::KMIP_IO_FAILURE,
+          "BIO_set_conn_hostname failed for '" + server_host.address +
+              "': " + getOpenSslError()
+      );
+    }
     BIO_set_conn_port(new_bio.get(), m_port.c_str());
 
     if (m_timeout_ms > 0) {
