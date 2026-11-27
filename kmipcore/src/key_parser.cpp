@@ -81,10 +81,16 @@ namespace kmipcore {
 
       secure_bytes kv = secure_key_material(*key_material);
 
-      // Parse attributes from the key value's Attribute children.
-      Attributes key_attrs = AttributesParser::parse(
-          key_value->getChildren(tag::KMIP_TAG_ATTRIBUTE)
-      );
+      // Attributes encapsulated with the key material: Attribute structures
+      // in KMIP 1.4 (§2.1.4, Table 8), one Attributes structure of typed
+      // attributes in KMIP 2.0 (§3.2, Table 13).
+      auto value_attrs = key_value->getChildren(tag::KMIP_TAG_ATTRIBUTE);
+      if (const auto attributes = key_value->getChild(tag::KMIP_TAG_ATTRIBUTES);
+          attributes && attributes->asStructure()) {
+        const auto &typed = attributes->asStructure()->items;
+        value_attrs.insert(value_attrs.end(), typed.begin(), typed.end());
+      }
+      Attributes key_attrs = AttributesParser::parse(value_attrs);
 
       // Algorithm and Length may also appear directly in the Key Block.
       if (auto alg_elem =

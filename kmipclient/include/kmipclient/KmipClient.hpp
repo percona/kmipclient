@@ -169,8 +169,13 @@ namespace kmipclient {
      * @param id Unique identifier of the key object.
      * @param all_attributes When true, fetches all available attributes.
      * @return Decoded key object.
-     * @throws kmipcore::KmipException on protocol or server-side failure, or
-     * (KMIP_NOT_IMPLEMENTED) for a key the server returns only in a
+     * @throws kmipcore::KmipException on protocol or server-side failure;
+     * KMIP_OBJECT_MISMATCH when a response is for another object (a
+     * response without a Unique Identifier is not checked);
+     * KMIP_INVALID_ENCODING when a symmetric key states no Cryptographic
+     * Length, its material does not match it, or its Key Block and its
+     * attributes state different algorithms or lengths;
+     * KMIP_NOT_IMPLEMENTED for a key the server returns only in a
      * Transparent Key Format Type, which holds no byte encoding.
      */
     [[nodiscard]] std::unique_ptr<Key>
@@ -181,7 +186,9 @@ namespace kmipclient {
      * @param id Unique identifier of the secret object.
      * @param all_attributes When true, fetches all available attributes.
      * @return Decoded secret object.
-     * @throws kmipcore::KmipException on protocol or server-side failure.
+     * @throws kmipcore::KmipException on protocol or server-side failure;
+     * KMIP_OBJECT_MISMATCH when a response is for another object (a Get
+     * Attributes response without a Unique Identifier is not checked).
      */
     [[nodiscard]] Secret
         op_get_secret(const std::string &id, bool all_attributes = false) const;
@@ -208,7 +215,9 @@ namespace kmipclient {
      * @param id Unique identifier of the target object.
      * @param attr_names Attribute names to fetch (for example "Name", "State").
      * @return Type-safe @ref Attributes bag with the requested attributes.
-     * @throws kmipcore::KmipException on protocol or server-side failure.
+     * @throws kmipcore::KmipException on protocol or server-side failure;
+     * KMIP_OBJECT_MISMATCH when the response is for another object (a
+     * response without a Unique Identifier is not checked).
      */
     [[nodiscard]] kmipcore::Attributes op_get_attributes(
         const std::string &id, const std::vector<std::string> &attr_names
