@@ -25,6 +25,7 @@
   #include <csignal>
 #endif
 
+using kmipclient::test::Loopback;
 using kmipclient::test::Socket;
 using kmipclient::test::tcp_connect;
 using kmipclient::test::TempDir;
@@ -152,6 +153,23 @@ TEST(TlsTestServerTest, VerifiedClientExchangesData) {
   EXPECT_TRUE(server.wait_for_completed(1));
   // No second connection comes, so the wait ends on its timeout.
   EXPECT_FALSE(server.wait_for_completed(2, milliseconds(50)));
+  EXPECT_EQ(server.handshakes(), 1);
+  EXPECT_EQ(server.error(), "");
+}
+
+// With Loopback::IPv6 the server listens on ::1.
+TEST(TlsTestServerTest, Ipv6ServerAcceptsAConnectionToIpv6Loopback) {
+  TempDir dir;
+  TestCert cert(dir, "server", "IP:::1");
+  TlsTestServer server(cert, {}, seconds(5), Loopback::IPv6);
+
+  kmipclient::NetClientOpenSSL client(
+      "[::1]", server.port(), cert.cert(), cert.key(), cert.cert(), 2000
+  );
+  client.set_tls_verification({true, false});  // the chain only
+  EXPECT_TRUE(client.connect());
+  client.close();
+  EXPECT_TRUE(server.wait_for_completed(1));
   EXPECT_EQ(server.handshakes(), 1);
   EXPECT_EQ(server.error(), "");
 }
