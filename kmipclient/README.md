@@ -750,7 +750,7 @@ cmake -DBUILD_TESTS=ON -DWITH_ASAN=ON \
       "-DCMAKE_C_FLAGS=-fsanitize=address -fno-omit-frame-pointer" \
       "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address" \
       ..
-cmake --build . --target kmipclient_test
+cmake --build .
 ```
 
 ---
@@ -799,9 +799,12 @@ cmake --build .
 
 ```bash
 ctest --output-on-failure
-# or directly:
-./kmipclient/kmipclient_test
 ```
+
+ctest runs every test program. `kmipclient_test` holds most of the tests;
+`kmipclient_tls_plaintext_test` is a program of its own because it replaces
+OpenSSL's allocator. Each can also be run directly, for example
+`./kmipclient/kmipclient_test`.
 
 When `KMIP_RUN_2_0_TESTS` is not set to `1`, the KMIP 2.0 integration tests
 are skipped (GoogleTest reports them as `SKIPPED`).
@@ -815,7 +818,7 @@ The KMIP 1.4 integration suite includes enabled tests for:
 
 ```bash
 ASAN_OPTIONS="detect_leaks=1:halt_on_error=0:print_stats=1" \
-  ./kmipclient/kmipclient_test
+  ctest --output-on-failure
 ```
 
 ---

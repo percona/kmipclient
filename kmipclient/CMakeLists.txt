@@ -139,6 +139,14 @@ if(BUILD_TESTS)
     kmipclient
   )
 
+  # Separate program: it replaces OpenSSL's allocator before OpenSSL
+  # allocates anything.
+  add_executable(kmipclient_tls_plaintext_test tests/TlsPlaintextTest.cpp)
+  target_link_libraries(
+    kmipclient_tls_plaintext_test PRIVATE GTest::gtest_main kmipclient
+  )
+
   include(GoogleTest)
   gtest_discover_tests(kmipclient_test)
+  gtest_discover_tests(kmipclient_tls_plaintext_test)
 endif()

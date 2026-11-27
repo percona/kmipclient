@@ -1,3 +1,11 @@
+Unreleased
+
+    NetClientOpenSSL sets SSL_OP_CLEANSE_PLAINTEXT (OpenSSL 3.0 and later):
+    OpenSSL zeroes each decrypted TLS record in its read buffer once it has
+    been read, and the buffer again when the connection is freed, so
+    responses no longer stay in OpenSSL's memory after the library has
+    copied them into its own zeroed-on-free buffers.
+
 Oct, 2026 Version 0.4.0
 
     Key reading, writing and generation moved out of the Key classes into the
